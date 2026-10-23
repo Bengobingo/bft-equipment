@@ -182,9 +182,24 @@ function Field({
   );
 }
 function Avatar({ name, small = false }: { name: string; small?: boolean }) {
+  const displayName = name.trim();
+  const characters = Array.from(displayName);
+  const isLatinName = /\p{Script=Latin}/u.test(displayName);
+  const label = isLatinName
+    ? characters.length <= 4
+      ? displayName
+      : displayName
+          .split(/\s+/u)
+          .slice(0, 2)
+          .map((part) => Array.from(part)[0])
+          .join("")
+          .toLocaleUpperCase()
+    : characters.slice(-2).join("");
   return (
     <span
-      className={"avatar " + (small ? "small" : "")}
+      className={"avatar " + (small ? "small " : "") + (Array.from(label).length > 2 ? "name-label" : "")}
+      title={displayName}
+      aria-hidden="true"
       style={
         {
           "--avatar-hue": String(
@@ -193,7 +208,7 @@ function Avatar({ name, small = false }: { name: string; small?: boolean }) {
         } as React.CSSProperties
       }
     >
-      {name.slice(-2)}
+      {label}
     </span>
   );
 }
@@ -1049,10 +1064,12 @@ export default function Home() {
             </div>
             <button
               className="top-avatar"
-              aria-label="開啟帳號設定"
+              aria-label={`開啟 ${u.name} 的帳號設定`}
+              title={u.name}
               onClick={() => navigate("settings")}
             >
               <Avatar name={u.name} small />
+              <span className="top-avatar-name">{u.name}</span>
             </button>
           </div>
         </header>
