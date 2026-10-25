@@ -29,6 +29,13 @@
       "when": 1792857804584,
       "tag": "0003_short_kit_codes",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1792940791133,
+      "tag": "0004_merge_custodian_role",
+      "breakpoints": true
     }
   ]
 }

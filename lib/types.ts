@@ -1,7 +1,6 @@
 export const roles = {
   employee: "產線操作人員",
   approver: "PED 工程人員",
-  custodian: "PED 設備箱管理員",
   admin: "PED 系統管理員",
 } as const;
 export type Role = keyof typeof roles;
@@ -124,7 +123,7 @@ export function canReviewDepartment(u: Pick<User, "role" | "department">, depart
   return u.role === "admin" || (u.role === "approver" && u.department === department);
 }
 export function canManageEquipment(u: Pick<User, "role">) {
-  return ["admin", "custodian", "approver"].includes(u.role);
+  return ["admin", "approver"].includes(u.role);
 }
 export const categories = [
   "伺服器整機設備箱",

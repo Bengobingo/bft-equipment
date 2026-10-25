@@ -24,7 +24,7 @@ export function useLabels() {
     returned: tx("已歸還", "Returned"), rejected: tx("已駁回", "Rejected"), cancelled: tx("已取消", "Cancelled"),
     ready: tx("可申請", "Available"), unconfigured: tx("待建零件清單", "Manifest needed"), reserved: tx("今日已預約", "Reserved today"), maintenance: tx("待維護／補件", "Maintenance / shortage"), retired: tx("已停用", "Retired"), overdue: tx("逾期未還", "Overdue"),
   }[value] || value);
-  const role = (value: Role) => ({ employee: tx("產線操作人員", "Production operator"), approver: tx("PED 工程人員", "PED engineer"), custodian: tx("PED 設備箱管理員", "PED kit custodian"), admin: tx("PED 系統管理員", "PED administrator") }[value]);
+  const role = (value: Role) => ({ employee: tx("產線操作人員", "Production operator"), approver: tx("PED 工程人員", "PED engineer"), admin: tx("PED 系統管理員", "PED administrator") }[value]);
   const category = (value: string) => locale !== "en" ? value : ["Server system kit", "Mainboard test kit", "CPU / DIMM kit", "Storage / cable kit", "Thermal / fixture kit", "Other engineering kit"][categories.indexOf(value)] || value;
   const date = (value: string, time = false) => value ? new Intl.DateTimeFormat(locale, { timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit", ...(time ? { hour: "2-digit", minute: "2-digit", hour12: false } : {}) }).format(new Date(value.length === 10 ? value + "T00:00:00+08:00" : value)) : "—";
   return { status, role, category, date };

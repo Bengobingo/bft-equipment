@@ -720,7 +720,7 @@ export async function handle(req: Request) {
       } else if (action === "checkout") {
         assert(
           canManageEquipment(u),
-          "僅工程人員、設備箱管理員或系統管理員可辦理領用",
+          "僅工程人員或系統管理員可辦理領用",
           403,
         );
         assert(
@@ -740,7 +740,7 @@ export async function handle(req: Request) {
       } else if (action === "return") {
         assert(
           canManageEquipment(u),
-          "僅工程人員、設備箱管理員或系統管理員可辦理歸還",
+          "僅工程人員或系統管理員可辦理歸還",
           403,
         );
         assert(note, "請填寫歸還檢查紀錄");

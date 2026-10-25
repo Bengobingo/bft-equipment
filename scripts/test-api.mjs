@@ -95,7 +95,7 @@ await admin(
   "https://invalid.example",
 );
 const users = {};
-for (const role of ["employee", "approver", "custodian"]) {
+for (const role of ["employee", "approver"]) {
   const username = `qa.${role}.${suffix}`;
   await admin("users", "POST", {
     username,
@@ -117,12 +117,18 @@ for (const role of ["employee", "approver", "custodian"]) {
   });
 }
 const employee = users.employee.call,
-  approver = users.approver.call,
-  custodian = users.custodian.call;
+  approver = users.approver.call;
 await employee("equipment", "POST", {}, 403);
 await approver("users", "POST", {}, 403);
 await approver("settings", "PUT", {}, 403);
-await custodian("settings", "PUT", {}, 403);
+const retiredRole = { username: `qa.retired.${suffix}`, name: "Removed role", email: "", department: "測試部門", role: "custodian", password };
+await admin("users", "POST", retiredRole, 400);
+const operatorRecord = (await admin("state")).users.find(row => row.username === users.employee.username);
+await admin(`users/${operatorRecord.id}`, "PUT", { ...operatorRecord, role: "custodian", active: 1 }, 400);
+const roleState = await admin("state");
+assert(!roleState.users.some(row => row.role === "custodian" || row.username === retiredRole.username));
+assert.equal(roleState.users.find(row => row.id === operatorRecord.id).role, "employee");
+checks += 2;
 await admin(
   "users",
   "POST",
@@ -214,8 +220,7 @@ assert.equal(d.loans.find((x) => x.id === l.id).production_line, "FCT-02");
 assert.equal(d.loans.find((x) => x.id === l.id).work_order, "");
 checks += 5;
 await employee(`loans/${l.id}/approve`, "POST", {}, 403);
-await custodian(`loans/${l.id}/approve`, "POST", {}, 403);
-await custodian(`loans/${l.id}/checkout`, "POST", {}, 409);
+await approver(`loans/${l.id}/checkout`, "POST", {}, 409);
 await admin(
   "equipment/" + eq.id,
   "PUT",
@@ -225,12 +230,12 @@ await admin(
 await approver(`loans/${l.id}/approve`, "POST", { note: "用途符合規範" });
 await approver(`loans/${l.id}/approve`, "POST", {}, 409);
 await employee(`loans/${l.id}/checkout`, "POST", {}, 403);
-await custodian(`loans/${l.id}/checkout`, "POST", { note: "配件齊全" }, 400);
-await custodian(`loans/${l.id}/checkout`, "POST", { note: "配件齊全", checklist: checklist.slice(1) }, 400);
-await custodian(`loans/${l.id}/checkout`, "POST", { note: "配件齊全", checklist });
+await approver(`loans/${l.id}/checkout`, "POST", { note: "配件齊全" }, 400);
+await approver(`loans/${l.id}/checkout`, "POST", { note: "配件齊全", checklist: checklist.slice(1) }, 400);
+await approver(`loans/${l.id}/checkout`, "POST", { note: "配件齊全", checklist });
 await employee(`loans/${l.id}/cancel`, "POST", {}, 409);
-await custodian(`loans/${l.id}/return`, "POST", { note: "" }, 400);
-await custodian(`loans/${l.id}/return`, "POST", { note: "設備正常，配件完整", checklist });
+await approver(`loans/${l.id}/return`, "POST", { note: "" }, 400);
+await approver(`loans/${l.id}/return`, "POST", { note: "設備正常，配件完整", checklist });
 d = await employee("state");
 const returned = d.loans.find((x) => x.id === l.id);
 assert.equal(returned.status, "returned");

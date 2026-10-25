@@ -52,7 +52,14 @@ try {
     await browser.close(); process.exit(0);
   }
   for (const [route, title] of [["equipment", "Engineering box"], ["loans", "Production loans"], ["approvals", "PED approval center"], ["reports", "Kit utilization reports"], ["users", "Members & permissions"], ["audit", "Activity & handovers"], ["settings", "Account & preferences"]]) { await go(route, title); checks++; }
-  await click("Appearance & language"); assert.equal(await page.eval(() => document.querySelector('[aria-label="Interface language"]').value), "en"); checks++;
+  stage = "three member roles"; await go("users"); await click("Add member"); await until(() => !!document.querySelector("dialog[open]"), "member editor");
+  assert.deepEqual(await page.eval(() => [...document.querySelectorAll("dialog select option")].map(option => [option.value, option.textContent])), [["employee", "Production operator"], ["approver", "PED engineer"], ["admin", "PED administrator"]]); checks++;
+  await page.eval(() => document.querySelector("dialog .language-toggle").click()); await until(() => document.documentElement.lang === "zh-Hant", "Chinese roles");
+  assert.deepEqual(await page.eval(() => [...document.querySelectorAll("dialog select option")].map(option => option.textContent)), ["產線操作人員", "PED 工程人員", "PED 系統管理員"]); checks++;
+  assert(!(await page.eval(() => document.querySelector(".sheet").textContent.includes("設備箱管理員")))); checks++;
+  await page.eval(() => document.querySelector("dialog .language-toggle").click()); await until(() => document.documentElement.lang === "en", "English roles restored"); await click("Cancel", ".dialog-footer button");
+  assert(!(await state()).users.some(row => row.role === "custodian")); checks++;
+  await go("settings"); await click("Appearance & language"); assert.equal(await page.eval(() => document.querySelector('[aria-label="Interface language"]').value), "en"); checks++;
   await shot("preferences-en-dark");
   stage = "register kit"; await go("equipment"); await click("Register kit"); await until(() => !!document.querySelector("dialog[open]"), "register kit dialog");
   const name = "Server Production Kit / UI " + Date.now();
