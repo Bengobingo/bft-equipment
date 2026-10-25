@@ -7,9 +7,10 @@ import { categories, type KitPart, type PartCheck, type Loan, type Role } from "
 export function Button({ children, variant = "", className = "", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: string }) {
   return <button type="button" {...props} className={`button ${variant} ${className}`}>{children}</button>;
 }
-export function Brand() {
+export function Brand({ onHome }: { onHome?: () => void }) {
   const { tx } = usePreferences();
-  return <div className="brand"><Box size={30} strokeWidth={1.6} /><span><strong>BFT <b>PED</b></strong><small>{tx("工程設備箱管制", "Engineering Kit Control")}</small></span></div>;
+  const content = <><Box size={30} strokeWidth={1.6} aria-hidden="true" /><span><strong>BFT <b>PED</b></strong><small>{tx("工程設備箱管制", "Engineering Kit Control")}</small></span></>;
+  return onHome ? <a className="brand" href="#dashboard" aria-label={tx("BFT PED 首頁", "BFT PED home")} title={tx("返回生產支援總覽", "Back to production support")} onClick={event => { if (event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) { event.preventDefault(); onHome(); } }}>{content}</a> : <div className="brand">{content}</div>;
 }
 export function Avatar({ name }: { name: string }) {
   const clean = name.trim();
