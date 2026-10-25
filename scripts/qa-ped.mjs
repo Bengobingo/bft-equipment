@@ -34,7 +34,7 @@ async function rowAction(name, action) { assert(await page.eval(({ name, action 
 try {
   await page.goto(base, { settleMs: 500 }); await until(() => !!document.querySelector('[name="username"]'), "sign-in");
   await shot("login-zh-light"); await field("username", auth.username); await field("password", auth.password); await click("登入工作空間");
-  await until(() => document.querySelector(".sheet h1")?.textContent === "生產支援總覽", "production dashboard");
+  await until(() => document.querySelector(".sheet h1")?.textContent === "總覽", "production dashboard");
   assert.equal((await state()).user.username, "qa.admin"); checks++;
   for (const width of [1440, 768, 390, 375]) {
     await shot(`dashboard-zh-light-${width}`, width, width > 600 ? 1000 : 844);
@@ -43,7 +43,7 @@ try {
   }
   console.log("Dashboard and responsive shell passed."); stage = "theme and language";
   await page.eval(() => document.querySelector(".theme-toggle").click()); await until(() => document.documentElement.dataset.theme === "dark", "dark mode");
-  await page.eval(() => document.querySelector(".language-toggle").click()); await until(() => document.documentElement.lang === "en" && document.querySelector(".sheet h1").textContent === "Production support", "English UI");
+  await page.eval(() => document.querySelector(".language-toggle").click()); await until(() => document.documentElement.lang === "en" && document.querySelector(".sheet h1").textContent === "dashboard", "English UI");
   await shot("dashboard-en-dark-1440");
   if (process.env.BFT_QA_VISUAL_ONLY === "1") {
     const geometry = await page.eval(() => Object.fromEntries([".topbar", ".workspace-search", ".top-actions", ".appearance-controls", ".top-avatar"].map(selector => { const element = document.querySelector(selector), rect = element.getBoundingClientRect(); return [selector, { left: rect.left, right: rect.right, width: rect.width, scroll: element.scrollWidth, client: element.clientWidth }]; })));
@@ -103,7 +103,7 @@ try {
   const engineerToday = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
   await adminApi("loans", { equipment_id: engineerKit.id, start: engineerToday, end: engineerToday, production_line: "FCT-01", product_model: "Server QA", purpose: "Engineer review and handover validation" });
   await go("settings"); await click("Sign out"); await until(() => !!document.querySelector('[name="username"]'), "engineer sign-in screen");
-  await field("username", reviewer); await field("password", newPassword); await click("Sign in"); await until(() => document.querySelector(".sheet h1")?.textContent === "Production support", "engineer dashboard");
+  await field("username", reviewer); await field("password", newPassword); await click("Sign in"); await until(() => document.querySelector(".sheet h1")?.textContent === "dashboard", "engineer dashboard");
   assert(await page.eval(() => document.querySelector(".sidebar-account").textContent.includes("PED engineer")));
   assert(!(await page.eval(() => document.querySelector(".sidebar nav").textContent.includes("Members & permissions")))); checks += 2;
   await go("equipment"); await click("Register kit"); await until(() => !!document.querySelector("dialog[open]"), "engineer can register kit"); await click("Cancel", ".dialog-footer button");
@@ -127,13 +127,13 @@ try {
   const operatorKit = (await adminApi("state", undefined, "GET")).equipment.find(row => row.name === operatorKitName);
   await go("settings"); await click("Sign out"); await until(() => !!document.querySelector('[name="username"]'), "sign out"); await shot("login-en-dark-390", 390, 844); await field("username", operator); await field("password", password); await click("Sign in"); await until(() => !!document.querySelector(".settings-form"), "forced password change");
   assert(await page.eval(() => [...document.querySelectorAll('.settings-form input[autocomplete="new-password"]')].every(input => input.minLength === 6 && input.maxLength === 128))); checks++;
-  await field("currentPassword", password); await field("newPassword", newPassword); await fill('.settings-form input[autocomplete="new-password"]', newPassword, 1); await click("Save account changes"); await until(() => document.querySelector(".sheet h1")?.textContent === "Production support", "operator activated"); assert.equal(await page.eval(() => document.querySelector(".top-avatar .avatar").textContent), "Ben"); checks++;
+  await field("currentPassword", password); await field("newPassword", newPassword); await fill('.settings-form input[autocomplete="new-password"]', newPassword, 1); await click("Save account changes"); await until(() => document.querySelector(".sheet h1")?.textContent === "dashboard", "operator activated"); assert.equal(await page.eval(() => document.querySelector(".top-avatar .avatar").textContent), "Ben"); checks++;
   assert(!(await page.eval(() => document.querySelector(".sidebar nav").textContent.includes("PED approval center")))); assert(!(await page.eval(() => document.querySelector(".sidebar nav").textContent.includes("Members & permissions")))); checks += 2;
   await newBorrow(operatorKit.id, "Production functional test on Line A"); await click("Submit production request"); await until(() => location.hash === "#loans/pending" && !document.querySelector("dialog[open]"), "operator request"); current = await state(); assert(current.loans.length === 1 && current.loans.every(loan => loan.user_id === current.user.id)); checks++;
   const operatorLoan = current.loans[0]; assert.equal(operatorLoan.production_line, "FCT-02"); assert.equal(operatorLoan.work_order, ""); checks += 2;
   stage = "operator request full lifecycle";
   await go("settings"); await click("Sign out"); await until(() => !!document.querySelector('[name="username"]'), "admin sign-in for operator request");
-  await field("username", auth.username); await field("password", auth.password); await click("Sign in"); await until(() => document.querySelector(".sheet h1")?.textContent === "Production support", "admin review dashboard");
+  await field("username", auth.username); await field("password", auth.password); await click("Sign in"); await until(() => document.querySelector(".sheet h1")?.textContent === "dashboard", "admin review dashboard");
   await go("approvals"); await rowAction(operatorKitName, "Review"); await field("note", "Fixture FCT-02 production request approved"); await click("Approve request"); await until(() => !document.querySelector("dialog[open]"), "operator request approved");
   assert.equal((await state()).loans.find(row => row.id === operatorLoan.id).status, "approved"); checks++;
   await go("loans/approved"); await rowAction(operatorKitName, "Issue"); await until(() => !!document.querySelector(".checklist"), "operator kit issue checklist");

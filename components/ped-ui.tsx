@@ -10,7 +10,7 @@ export function Button({ children, variant = "", className = "", ...props }: But
 export function Brand({ onHome }: { onHome?: () => void }) {
   const { tx } = usePreferences();
   const content = <><Box size={30} strokeWidth={1.6} aria-hidden="true" /><span><strong>BFT <b>PED</b></strong><small>{tx("工程設備箱管制", "Engineering Kit Control")}</small></span></>;
-  return onHome ? <a className="brand" href="#dashboard" aria-label={tx("BFT PED 首頁", "BFT PED home")} title={tx("返回生產支援總覽", "Back to production support")} onClick={event => { if (event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) { event.preventDefault(); onHome(); } }}>{content}</a> : <div className="brand">{content}</div>;
+  return onHome ? <a className="brand" href="#dashboard" aria-label={tx("BFT PED 首頁", "BFT PED home")} title={tx("返回總覽", "Back to dashboard")} onClick={event => { if (event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) { event.preventDefault(); onHome(); } }}>{content}</a> : <div className="brand">{content}</div>;
 }
 export function Avatar({ name }: { name: string }) {
   const clean = name.trim();
