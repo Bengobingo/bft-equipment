@@ -51,7 +51,7 @@ try {
     console.log(JSON.stringify({ ok: true, checks, geometry, findings }));
     await browser.close(); process.exit(0);
   }
-  for (const [route, title] of [["equipment", "Engineering kits"], ["loans", "Production loans"], ["approvals", "PED approval center"], ["reports", "Kit utilization reports"], ["users", "Members & permissions"], ["audit", "Activity & handovers"], ["settings", "Account & preferences"]]) { await go(route, title); checks++; }
+  for (const [route, title] of [["equipment", "Engineering box"], ["loans", "Production loans"], ["approvals", "PED approval center"], ["reports", "Kit utilization reports"], ["users", "Members & permissions"], ["audit", "Activity & handovers"], ["settings", "Account & preferences"]]) { await go(route, title); checks++; }
   await click("Appearance & language"); assert.equal(await page.eval(() => document.querySelector('[aria-label="Interface language"]').value), "en"); checks++;
   await shot("preferences-en-dark");
   stage = "register kit"; await go("equipment"); await click("Register kit"); await until(() => !!document.querySelector("dialog[open]"), "register kit dialog");
