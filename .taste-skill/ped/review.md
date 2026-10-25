@@ -1,0 +1,11 @@
+# PED engineering kit workspace
+
+The screen answers: which complete engineering kits can support production, and which requests require PED action?
+
+The objects are whole kits, component manifests (CPU, DIMM, Cable, U.2, Heatsink and Other), production lines, work orders, requests, inspection snapshots and member roles. Totals, pipeline counts and charts use the same permission-scoped API data. Optional demonstration data contains explicitly marked server validation kits; the working database was never reseeded.
+
+The Achromatic ledger direction is used with the existing self-hosted IBM Plex Sans, IBM Plex Mono and Noto Sans TC. Its face comes from a cool factory ground, restrained neutral chrome and the physical compartment layout of the kit manifest preview. Blue identifies requests in charts, neutral grey identifies returns, and status colors mark decisions or exceptions. Dark mode uses neutral greys rather than navy. The native modal keeps focus, supports Escape and exposes its own theme and language controls.
+
+Verified at 1440, 768, 390 and 375 pixels. No horizontal page overflow, runtime exceptions, external requests or visual FAIL findings remain. All text is at least 11px; primary data remains 13–14px. Metadata and part/kit identifiers use 11–12px to retain useful production context. The remaining inspector warnings are intentional: PED is the department's uppercase acronym; 25–26px app titles match the dense operational screen; compact metadata uses 11–12px rather than the size of primary record names. Desktop and mobile screenshots were reviewed after increasing previously smaller labels.
+
+API coverage includes same-department engineering approval, cross-department approval denial, self-approval prevention, engineer equipment management and handovers, immutable manifests, concurrent duplicate submission, complete component issue checks, return quantity validation and automatic maintenance on shortage. Engineering staff can inspect factory-wide loan records for handovers, while approval remains limited to other requesters in their own department. Browser coverage includes the PED engineer role label and its actual equipment, approval, issue and return controls, persisted Chinese/English and light/dark choices, account/password flows, and production operator scope.

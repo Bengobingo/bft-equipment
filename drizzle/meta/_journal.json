@@ -15,6 +15,20 @@
       "when": 1792759457207,
       "tag": "0001_powerful_eternity",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792770789634,
+      "tag": "0002_ped_equipment_kits",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1792857804584,
+      "tag": "0003_short_kit_codes",
+      "breakpoints": true
     }
   ]
 }

@@ -1,8 +1,8 @@
 export const roles = {
-  employee: "一般使用者",
-  approver: "簽核主管",
-  custodian: "設備管理員",
-  admin: "系統管理員",
+  employee: "產線操作人員",
+  approver: "PED 工程人員",
+  custodian: "PED 設備箱管理員",
+  admin: "PED 系統管理員",
 } as const;
 export type Role = keyof typeof roles;
 export type User = {
@@ -29,6 +29,23 @@ export type Equipment = {
   notes: string;
   created: string;
   busy?: number;
+  reserved?: number;
+  components: KitPart[];
+};
+export const partTypes = ["CPU", "DIMM", "Cable", "U.2", "Heatsink", "Other"] as const;
+export type KitPart = {
+  id: string;
+  type: (typeof partTypes)[number];
+  name: string;
+  partNumber: string;
+  serial: string;
+  quantity: number;
+};
+export type PartCheck = {
+  id: string;
+  quantity: number;
+  condition: "ok" | "damaged" | "missing";
+  checked: boolean;
 };
 export type Loan = {
   id: string;
@@ -52,6 +69,12 @@ export type Loan = {
   category: string;
   user_name: string;
   approver_name: string | null;
+  production_line: string;
+  work_order: string;
+  product_model: string;
+  manifest: KitPart[];
+  checkout_check: PartCheck[];
+  return_check: PartCheck[];
 };
 export type Event = {
   id: string;
@@ -94,15 +117,20 @@ export function canApprove(u: User, l: Loan) {
   return (
     l.status === "pending" &&
     l.user_id !== u.id &&
-    (u.role === "admin" ||
-      (u.role === "approver" && u.department === l.department))
+    canReviewDepartment(u, l.department)
   );
 }
+export function canReviewDepartment(u: Pick<User, "role" | "department">, department: string) {
+  return u.role === "admin" || (u.role === "approver" && u.department === department);
+}
+export function canManageEquipment(u: Pick<User, "role">) {
+  return ["admin", "custodian", "approver"].includes(u.role);
+}
 export const categories = [
-  "電腦設備",
-  "攝影器材",
-  "影音設備",
-  "行動裝置",
-  "辦公設備",
-  "其他設備",
+  "伺服器整機設備箱",
+  "主機板測試設備箱",
+  "CPU / DIMM 設備箱",
+  "儲存 / 線材設備箱",
+  "散熱 / 治具設備箱",
+  "其他工程設備箱",
 ];

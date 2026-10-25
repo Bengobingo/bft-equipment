@@ -1,9 +1,19 @@
 import type { Metadata } from "next";
+import "@fontsource/ibm-plex-sans/400.css";
+import "@fontsource/ibm-plex-sans/500.css";
+import "@fontsource/ibm-plex-sans/600.css";
+import "@fontsource/ibm-plex-mono/400.css";
+import "@fontsource/ibm-plex-mono/500.css";
+import "@fontsource/noto-sans-tc/400.css";
+import "@fontsource/noto-sans-tc/500.css";
+import "@fontsource/noto-sans-tc/600.css";
+import "@fontsource/noto-sans-tc/700.css";
 import "./globals.css";
+import { PreferencesProvider } from "@/components/preferences";
 
 export const metadata: Metadata = {
-  title: "BFT 設備管理｜讓每一次借還井然有序",
-  description: "設備資產、借還申請、分層簽核與團隊協作。",
+  title: "BFT PED｜工程設備箱管理",
+  description: "伺服器工廠 PED 工程設備箱、零件清單、產線借用、簽核與點交管理。Engineering kit control for server manufacturing.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
@@ -16,20 +26,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-Hant">
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link
-          rel="preconnect"
-          href="https://fonts.gstatic.com"
-          crossOrigin="anonymous"
-        />
-        <link
-          href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+TC:wght@400;500;600;700&display=swap"
-          rel="stylesheet"
-        />
-      </head>
-      <body>{children}</body>
+    <html lang="zh-Hant" suppressHydrationWarning>
+      <head><script dangerouslySetInnerHTML={{ __html: `(function(){try{var t=localStorage.getItem('bft.theme');document.documentElement.dataset.theme=t||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.lang=localStorage.getItem('bft.locale')==='en'?'en':'zh-Hant';}catch(e){}})();` }} /></head>
+      <body><PreferencesProvider>{children}</PreferencesProvider></body>
     </html>
   );
 }

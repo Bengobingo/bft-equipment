@@ -40,6 +40,7 @@ yarn-error.log*
 /.codex/
 /outputs/
 /work/
+/data/
 /.taste-skill/login/
 /.taste-skill/qa/
 

@@ -12,12 +12,10 @@ export async function digest(s: string) {
 export function validatePassword(p: string) {
   if (
     typeof p !== "string" ||
-    p.length < 12 ||
-    p.length > 128 ||
-    !/[a-zA-Z]/.test(p) ||
-    !/[0-9]/.test(p)
+    p.length < 6 ||
+    p.length > 128
   )
-    throw new Error("密碼需為 12–128 字元，並包含英文字母與數字");
+    throw new Error("密碼需為 6–128 字元");
 }
 async function derive(p: string, salt: string) {
   const key = await crypto.subtle.importKey(

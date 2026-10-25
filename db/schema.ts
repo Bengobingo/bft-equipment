@@ -36,6 +36,7 @@ export const equipment = sqliteTable("equipment", {
   location: text("location").notNull(),
   condition: text("condition").notNull(),
   notes: text("notes").notNull(),
+  components: text("components").notNull().default("[]"),
   created: text("created").notNull(),
 });
 export const loans = sqliteTable(
@@ -52,6 +53,12 @@ export const loans = sqliteTable(
     start: text("start").notNull(),
     end: text("end").notNull(),
     purpose: text("purpose").notNull(),
+    productionLine: text("production_line").notNull().default(""),
+    workOrder: text("work_order").notNull().default(""),
+    productModel: text("product_model").notNull().default(""),
+    manifest: text("manifest").notNull().default("[]"),
+    checkoutCheck: text("checkout_check").notNull().default("[]"),
+    returnCheck: text("return_check").notNull().default("[]"),
     status: text("status").notNull(),
     created: text("created").notNull(),
     updated: text("updated").notNull(),

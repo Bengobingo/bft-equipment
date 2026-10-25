@@ -1,7 +1,8 @@
 import { env } from "cloudflare:workers";
 import { digest, hashPassword, randomToken, verifyPassword } from "./security";
-import { roles, taipeiDate, type User, type Loan } from "./types";
-import { sampleEquipment } from "./seed";
+import { roles, statusNames, taipeiDate, canReviewDepartment, canManageEquipment, partTypes, type User, type Loan, type KitPart, type PartCheck } from "./types";
+import { sampleEquipment, sampleParts } from "./seed";
+import { translateSystem } from "./messages";
 
 const safeColumns =
   "id,username,name,email,department,role,active,must_change,created";
@@ -11,6 +12,7 @@ class ApiError extends Error {
   constructor(
     message: string,
     public status = 400,
+    public details?: { code: string; loanId?: string },
   ) {
     super(message);
   }
@@ -40,6 +42,11 @@ function username(b: Record<string, unknown>) {
     "帳號需為 3–40 字元的英文字母、數字、點、底線或連字號",
   );
   return s;
+}
+function passwordText(b: Record<string, unknown>, key: string) {
+  const value = b[key];
+  assert(typeof value === "string" && value.length > 0 && value.length <= 128, "密碼需為 6–128 字元");
+  return value;
 }
 function email(b: Record<string, unknown>) {
   const s = text(b, "email", 254, true);
@@ -80,6 +87,8 @@ async function logged(
   action: string,
   target: string,
   detail: string,
+  onConflict?: () => Promise<never>,
+  after: D1PreparedStatement[] = [],
 ) {
   const result = await db().batch([
     statement(sql, args),
@@ -87,7 +96,9 @@ async function logged(
       "INSERT INTO events (id,actor_id,action,target,detail,created) SELECT ?,?,?,?,?,? WHERE changes() > 0",
       [id(), actor.id, action, target, detail, now()],
     ),
+    ...after,
   ]);
+  if (result[0].meta.changes !== 1 && onConflict) await onConflict();
   assert(
     result[0].meta.changes === 1,
     "資料已被變更、設備時段衝突或操作條件不符，請重新整理後再試",
@@ -127,19 +138,54 @@ async function config() {
   );
   const o = Object.fromEntries(rows.map((x) => [x.key, x.value]));
   return {
-    organization: o.organization || "BFT 工作空間",
+    organization: o.organization || "BFT PED",
     maxDays: Number(o.maxDays || 30),
     sample: o.sample === "true",
   };
 }
-function equipmentInput(b: Record<string, unknown>) {
+function list<T>(value: unknown): T[] {
+  return typeof value === "string" ? JSON.parse(value) : Array.isArray(value) ? value : [];
+}
+function componentInput(value: unknown): KitPart[] {
+  assert(Array.isArray(value) && value.length >= 1 && value.length <= 80, "設備箱需包含 1–80 項零件");
+  const seen = new Set<string>();
+  return value.map((raw) => {
+    assert(raw && typeof raw === "object" && !Array.isArray(raw), "零件資料格式不正確");
+    const part = raw as Record<string, unknown>;
+    const partId = text(part, "id", 80);
+    assert(!seen.has(partId), "零件識別碼不可重複");
+    seen.add(partId);
+    assert(partTypes.includes(part.type as KitPart["type"]), "零件類別不正確");
+    assert(Number.isInteger(part.quantity) && Number(part.quantity) >= 1 && Number(part.quantity) <= 10000, "零件數量必須為 1–10000 的整數");
+    return { id: partId, type: part.type as KitPart["type"], name: text(part, "name", 100), partNumber: text(part, "partNumber", 100, true), serial: text(part, "serial", 100, true), quantity: Number(part.quantity) };
+  });
+}
+function checklistInput(value: unknown, manifest: KitPart[], action: "checkout" | "return"): PartCheck[] {
+  if (!manifest.length) return []; // Historical loans created before kit manifests remain operable.
+  assert(Array.isArray(value) && value.length === manifest.length, "請逐項完成全部零件的點交清單");
+  const expected = new Map(manifest.map((part) => [part.id, part]));
+  const seen = new Set<string>();
+  return value.map((raw) => {
+    assert(raw && typeof raw === "object", "點交清單格式不正確");
+    const row = raw as PartCheck;
+    const part = expected.get(row.id);
+    assert(part && !seen.has(row.id) && row.checked === true, "請逐項完成全部零件的點交清單");
+    seen.add(row.id);
+    assert(["ok", "damaged", "missing"].includes(row.condition) && Number.isInteger(row.quantity) && row.quantity >= 0 && row.quantity <= part.quantity, "點交數量或零件狀況不正確");
+    assert(row.quantity === part.quantity || row.condition !== "ok", "數量不足時請標示缺件或損壞");
+    if (action === "checkout") assert(row.quantity === part.quantity && row.condition === "ok", "借出前須確認全部零件齊全且正常");
+    return { id: row.id, quantity: row.quantity, condition: row.condition, checked: true };
+  });
+}
+function equipmentInput(input: Record<string, unknown>, defaults?: { code: string; brand: string; serial: string }) {
+  const b = { brand: "", serial: "", ...defaults, ...input };
   const condition = text(b, "condition");
   assert(
     ["ready", "maintenance", "retired"].includes(condition),
     "設備狀態不正確",
   );
   return [
-    text(b, "code", 40),
+    b.code === undefined ? null : text(b, "code", 40),
     text(b, "name", 100),
     text(b, "category", 30),
     text(b, "brand", 50, true),
@@ -152,20 +198,13 @@ function equipmentInput(b: Record<string, unknown>) {
 }
 async function state(u: User) {
   const restricted =
-    u.role === "employee"
-      ? "WHERE l.user_id=?"
-      : u.role === "approver"
-        ? "WHERE (l.department=? OR l.user_id=?)"
-        : "";
+    u.role === "employee" ? "WHERE l.user_id=?" : "";
   const args =
-    u.role === "employee"
-      ? [u.id]
-      : u.role === "approver"
-        ? [u.department, u.id]
-        : [];
+    u.role === "employee" ? [u.id] : [];
   const [equipment, loans, users, events, settings] = await Promise.all([
     all(
-      `SELECT e.*,EXISTS(SELECT 1 FROM loans l WHERE l.equipment_id=e.id AND l.status='borrowed') AS busy FROM equipment e ORDER BY e.code`,
+      `SELECT e.*,EXISTS(SELECT 1 FROM loans l WHERE l.equipment_id=e.id AND l.status='borrowed') AS busy,EXISTS(SELECT 1 FROM loans l WHERE l.equipment_id=e.id AND l.status IN ('pending','approved') AND l.start<=? AND l.end>=?) AS reserved FROM equipment e ORDER BY e.code`,
+      [taipeiDate(), taipeiDate()],
     ),
     all(
       `SELECT l.*,e.name AS equipment_name,e.code,e.category,u.name AS user_name,a.name AS approver_name FROM loans l JOIN equipment e ON e.id=l.equipment_id JOIN users u ON u.id=l.user_id LEFT JOIN users a ON a.id=l.approver_id ${restricted} ORDER BY l.created DESC`,
@@ -175,8 +214,8 @@ async function state(u: User) {
       ? all(`SELECT ${safeColumns} FROM users ORDER BY created`)
       : Promise.resolve([]),
     all(
-      `SELECT ev.*,u.name AS actor_name FROM events ev JOIN users u ON u.id=ev.actor_id ${u.role === "admin" || u.role === "custodian" ? "" : `WHERE ev.actor_id=? OR ev.target IN (SELECT l.id FROM loans l ${restricted})`} ORDER BY ev.created DESC LIMIT 200`,
-      u.role === "admin" || u.role === "custodian" ? [] : [u.id, ...args],
+      `SELECT ev.*,u.name AS actor_name FROM events ev JOIN users u ON u.id=ev.actor_id ${canManageEquipment(u) ? "" : `WHERE ev.actor_id=? OR ev.target IN (SELECT l.id FROM loans l ${restricted})`} ORDER BY ev.created DESC LIMIT 200`,
+      canManageEquipment(u) ? [] : [u.id, ...args],
     ),
     config(),
   ]);
@@ -187,8 +226,8 @@ async function state(u: User) {
   );
   return {
     user: safe,
-    equipment,
-    loans,
+    equipment: equipment.map((row) => ({ ...row, components: list<KitPart>(row.components) })),
+    loans: loans.map((row) => ({ ...row, manifest: list<KitPart>(row.manifest), checkout_check: list<PartCheck>(row.checkout_check), return_check: list<PartCheck>(row.return_check) })),
     users,
     events,
     settings: {
@@ -214,11 +253,14 @@ async function seed(actor: User) {
       ),
     ),
   );
+  equipmentIds.forEach((equipmentId, i) => batch.push(statement(
+    "UPDATE equipment SET components=? WHERE id=?", [JSON.stringify(sampleParts(i)), equipmentId],
+  )));
   const people = [
-    ["林育萱", "品牌行銷部"],
-    ["陳冠宇", "資訊工程部"],
-    ["王雅婷", "品牌行銷部"],
-    ["黃柏翰", "行政管理部"],
+    ["林育萱", "Production A"],
+    ["陳冠宇", "Production B"],
+    ["王雅婷", "Production A"],
+    ["黃柏翰", "Production C"],
   ];
   const peopleIds = people.map(() => id());
   people.forEach((p, i) =>
@@ -243,17 +285,17 @@ async function seed(actor: User) {
   const day = (offset: number) =>
     taipeiDate(new Date(Date.now() + offset * 86400000));
   const rows = [
-    [0, 0, -2, 3, "borrowed", "年度品牌提案・客戶簡報"],
-    [1, 2, 1, 3, "pending", "新品形象攝影・社群素材拍攝"],
-    [2, 1, 0, 1, "approved", "跨部門專案成果分享"],
-    [3, 3, -5, -1, "borrowed", "展場互動展示與問卷收集"],
-    [4, 0, 2, 4, "pending", "品牌訪談・影音內容製作"],
-    [5, 1, -6, -3, "returned", "新進同仁教育訓練"],
-    [7, 2, -3, 2, "borrowed", "遠端客戶專案會議"],
-    [8, 3, 3, 5, "pending", "活動報到工作站"],
-    [9, 0, -12, -10, "returned", "季度團隊分享會"],
-    [10, 2, -17, -15, "returned", "庫存盤點・標籤列印"],
-    [11, 3, -22, -20, "returned", "外勤客戶簡報"],
+    [0, 0, -2, 3, "borrowed", "Server mainboard functional test"],
+    [1, 2, 1, 3, "pending", "CPU / DIMM production validation"],
+    [2, 1, 0, 1, "approved", "U.2 storage qualification"],
+    [3, 3, -5, -1, "borrowed", "Server thermal verification"],
+    [4, 0, 2, 4, "pending", "Production cable continuity test"],
+    [5, 1, -6, -3, "returned", "New production line setup"],
+    [7, 2, -3, 2, "borrowed", "Mainboard power-on test"],
+    [8, 3, 3, 5, "pending", "Server system pilot build"],
+    [9, 0, -12, -10, "returned", "DIMM stress screening"],
+    [10, 2, -17, -15, "returned", "PED fixture verification"],
+    [11, 3, -22, -20, "returned", "Production rework validation"],
   ];
   for (const [ei, pi, start, end, status, purpose] of rows) {
     const loanId = id();
@@ -284,6 +326,10 @@ async function seed(actor: User) {
         ],
       ),
     );
+    batch.push(statement(
+      "UPDATE loans SET production_line=?,work_order=?,product_model=?,manifest=(SELECT components FROM equipment WHERE id=equipment_id) WHERE id=?",
+      ["SMT-" + (Number(pi) + 1), "DEMO-WO-" + String(Number(ei) + 1).padStart(4, "0"), "Server Validation / DEMO", loanId],
+    ));
     batch.push(
       statement(
         "INSERT INTO events (id,actor_id,action,target,detail,created) VALUES (?,?,?,?,?,?)",
@@ -321,10 +367,31 @@ export async function handle(req: Request) {
   try {
     const path = new URL(req.url).pathname.replace("/api/", "");
     const method = req.method;
+    let b: Record<string, unknown> = {};
     if (method !== "GET") {
-      const origin = req.headers.get("origin");
+      // Drain bounded request bodies before rejecting them. Leaving a body unread
+      // can reset the next request on a reused local HTTP connection.
+      const reader = req.body?.getReader();
+      const chunks: Uint8Array[] = [];
+      let length = 0;
+      if (reader) {
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            length += value.byteLength;
+            if (length >= 32768) {
+              await reader.cancel();
+              throw new ApiError("請求內容過大", 413);
+            }
+            chunks.push(value);
+          }
+        } finally {
+          reader.releaseLock();
+        }
+      }
       assert(
-        origin === new URL(req.url).origin,
+        req.headers.get("origin") === new URL(req.url).origin,
         "來源驗證失敗，請由本網站操作",
         403,
       );
@@ -338,17 +405,27 @@ export async function handle(req: Request) {
         "請求內容過大",
         413,
       );
-    }
-    let b: Record<string, unknown> = {};
-    if (method !== "GET") {
-      const raw = await req.text();
-      assert(raw.length < 32768, "請求內容過大", 413);
+      const bytes = new Uint8Array(length);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      const raw = new TextDecoder().decode(bytes);
       try {
         b = JSON.parse(raw);
       } catch {
         throw new ApiError("表單內容無法解析");
       }
       assert(b && typeof b === "object" && !Array.isArray(b), "表單格式不正確");
+    }
+    if (path === "health" && method === "GET") {
+      await first("SELECT key FROM settings LIMIT 1");
+      return respond({
+        application: "bft-equipment",
+        status: "ok",
+        instance: env.BFT_LOCAL_INSTANCE || null,
+      });
     }
     if (path === "auth" && method === "GET") {
       const u = await identity(req);
@@ -371,7 +448,7 @@ export async function handle(req: Request) {
       );
       const userId = id(),
         stamp = now(),
-        hash = await hashPassword(text(b, "password", 128));
+        hash = await hashPassword(passwordText(b, "password"));
       const result = await db().batch([
         statement("INSERT INTO settings (key,value) VALUES ('initialized',?)", [
           userId,
@@ -430,7 +507,7 @@ export async function handle(req: Request) {
         [login],
       );
       const ok = await verifyPassword(
-        text(b, "password", 128),
+        passwordText(b, "password"),
         u?.password || "0".repeat(64) + ":" + "0".repeat(64),
       );
       assert(u && u.active && ok, "帳號或密碼不正確，或帳號已停用", 401);
@@ -456,12 +533,12 @@ export async function handle(req: Request) {
     if (path === "state" && method === "GET") return respond(await state(u));
     if (path === "account" && method === "PUT") {
       assert(
-        await verifyPassword(text(b, "currentPassword", 128), u.password),
+        await verifyPassword(passwordText(b, "currentPassword"), u.password),
         "目前密碼不正確",
         403,
       );
       const pass = b.newPassword
-        ? await hashPassword(text(b, "newPassword", 128))
+        ? await hashPassword(passwordText(b, "newPassword"))
         : u.password;
       assert(!u.must_change || Boolean(b.newPassword), "請設定新的密碼");
       await db().batch([
@@ -485,24 +562,27 @@ export async function handle(req: Request) {
       );
     }
     if (path === "equipment" && method === "POST") {
-      assert(["admin", "custodian"].includes(u.role), "沒有設備管理權限", 403);
+      assert(canManageEquipment(u), "沒有設備管理權限", 403);
       const equipmentId = id();
       await db().batch([
         statement(
-          "INSERT INTO equipment (id,code,name,category,brand,model,serial,location,condition,notes,created) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-          [equipmentId, ...equipmentInput(b), now()],
+          "INSERT INTO equipment (id,code,name,category,brand,model,serial,location,condition,notes,created,components) SELECT ?,COALESCE(?,(SELECT printf('PED-%04d',COALESCE(MAX(CAST(SUBSTR(code,5) AS INTEGER)),0)+1) FROM equipment WHERE code GLOB 'PED-[0-9]*' AND SUBSTR(code,5) NOT GLOB '*[^0-9]*')),?,?,?,?,?,?,?,?,?,?",
+          [equipmentId, ...equipmentInput(b), now(), JSON.stringify(componentInput(b.components))],
         ),
         event(u.id, "新增設備", equipmentId, String(b.name)),
       ]);
       return respond({ ok: true });
     }
     if (path.startsWith("equipment/") && method === "PUT") {
-      assert(["admin", "custodian"].includes(u.role), "沒有設備管理權限", 403);
+      assert(canManageEquipment(u), "沒有設備管理權限", 403);
       const target = path.split("/")[1];
-      const values = equipmentInput(b);
+      const existing = await first<{ code: string; brand: string; serial: string }>("SELECT code,brand,serial FROM equipment WHERE id=?", [target]);
+      assert(existing, "找不到設備箱", 404);
+      const values = equipmentInput(b, existing);
+      const components = b.components === undefined ? null : JSON.stringify(componentInput(b.components));
       await logged(
-        "UPDATE equipment SET code=?,name=?,category=?,brand=?,model=?,serial=?,location=?,condition=?,notes=? WHERE id=? AND (?='ready' OR NOT EXISTS (SELECT 1 FROM loans WHERE equipment_id=? AND status IN ('pending','approved','borrowed')))",
-        [...values, target, b.condition, target],
+        "UPDATE equipment SET code=?,name=?,category=?,brand=?,model=?,serial=?,location=?,condition=?,notes=?,components=COALESCE(?,components) WHERE id=? AND (?='ready' OR NOT EXISTS (SELECT 1 FROM loans WHERE equipment_id=? AND status IN ('pending','approved','borrowed'))) AND (? IS NULL OR ?=components OR NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status IN ('pending','approved','borrowed')))",
+        [...values, components, target, b.condition, target, components, components, target],
         u,
         "更新設備",
         target,
@@ -515,6 +595,9 @@ export async function handle(req: Request) {
         start = text(b, "start", 10),
         end = text(b, "end", 10),
         purpose = text(b, "purpose", 1000),
+        productionLine = text(b, "production_line", 60),
+        workOrder = text(b, "work_order", 80),
+        productModel = text(b, "product_model", 100, true),
         settings = await config();
       assert(
         /^\d{4}-\d{2}-\d{2}$/.test(start) &&
@@ -537,7 +620,7 @@ export async function handle(req: Request) {
       const target = id(),
         stamp = now();
       await logged(
-        "INSERT INTO loans (id,equipment_id,user_id,department,start,end,purpose,status,created,updated) SELECT ?,?,?,?,?,?,?,'pending',?,? WHERE EXISTS(SELECT 1 FROM equipment WHERE id=? AND condition='ready') AND NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status IN ('pending','approved','borrowed') AND start<=? AND end>=?) AND NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status='borrowed' AND end<?)",
+        "INSERT INTO loans (id,equipment_id,user_id,department,start,end,purpose,status,created,updated,production_line,work_order,product_model,manifest) SELECT ?,?,?,?,?,?,?,'pending',?,?,?,?,?,components FROM equipment WHERE id=? AND condition='ready' AND components!='[]' AND NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status IN ('pending','approved','borrowed') AND start<=? AND end>=?) AND NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status='borrowed' AND end<?)",
         [
           target,
           equipmentId,
@@ -548,6 +631,9 @@ export async function handle(req: Request) {
           purpose,
           stamp,
           stamp,
+          productionLine,
+          workOrder,
+          productModel,
           equipmentId,
           equipmentId,
           end,
@@ -559,6 +645,33 @@ export async function handle(req: Request) {
         "提出借用申請",
         target,
         purpose,
+        async () => {
+          // Diagnose only after the atomic insert fails; never weaken its guards.
+          const own = await first<Loan>(
+            "SELECT * FROM loans WHERE equipment_id=? AND user_id=? AND status IN ('pending','approved','borrowed') AND ((start<=? AND end>=?) OR (status='borrowed' AND end<?)) ORDER BY created DESC LIMIT 1",
+            [equipmentId, u.id, end, start, taipeiDate()],
+          );
+          if (own)
+            throw new ApiError(
+              `你已有此設備的借用申請（${own.start}～${own.end}，${statusNames[own.status]}），請查看原申請，無需重複送出。`,
+              409,
+              { code: "own_reservation", loanId: own.id },
+            );
+          const equipment = await first<{ condition: string; components: string }>(
+            "SELECT condition,components FROM equipment WHERE id=?",
+            [equipmentId],
+          );
+          if (!equipment || equipment.condition !== "ready")
+            throw new ApiError("此設備已移除、停用或維護中，請重新選擇設備。", 409,
+              { code: "equipment_unavailable" });
+          if (!list(equipment.components).length)
+            throw new ApiError("設備箱尚未建立零件清單，請先由 PED 完成建檔。", 409, { code: "manifest_required" });
+          throw new ApiError(
+            "此設備的借用時段已被預約，或有逾期未歸還的借用。待簽核申請也會保留時段，請調整日期或選擇其他設備。",
+            409,
+            { code: "reservation_conflict" },
+          );
+        },
       );
       return respond({ ok: true, id: target });
     }
@@ -571,10 +684,8 @@ export async function handle(req: Request) {
       const stamp = now();
       if (action === "approve" || action === "reject") {
         assert(
-          (u.role === "admin" ||
-            (u.role === "approver" && u.department === l.department)) &&
-            u.id !== l.user_id,
-          "僅授權主管可簽核，且不得簽核自己的申請",
+          canReviewDepartment(u, l.department) && u.id !== l.user_id,
+          "僅同部門工程人員或系統管理員可簽核，且不得簽核自己的申請",
           403,
         );
         assert(action !== "reject" || note.length > 0, "請填寫駁回原因");
@@ -608,17 +719,19 @@ export async function handle(req: Request) {
         );
       } else if (action === "checkout") {
         assert(
-          ["admin", "custodian"].includes(u.role),
-          "僅設備管理員可辦理領用",
+          canManageEquipment(u),
+          "僅工程人員、設備箱管理員或系統管理員可辦理領用",
           403,
         );
         assert(
           l.start <= taipeiDate() && l.end >= taipeiDate(),
           "只能在核准的借用期間辦理領用",
         );
+        assert(l.status === "approved", "申請尚未核准或已完成領用，無法借出", 409);
+        const checklist = checklistInput(b.checklist, list<KitPart>(l.manifest), "checkout");
         await logged(
-          "UPDATE loans SET status='borrowed',checked_out=?,updated=? WHERE id=? AND status='approved' AND EXISTS(SELECT 1 FROM equipment WHERE id=? AND condition='ready') AND NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status='borrowed')",
-          [stamp, stamp, target, l.equipment_id, l.equipment_id],
+          "UPDATE loans SET status='borrowed',checked_out=?,updated=?,checkout_check=? WHERE id=? AND status='approved' AND EXISTS(SELECT 1 FROM equipment WHERE id=? AND condition='ready') AND NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status='borrowed')",
+          [stamp, stamp, JSON.stringify(checklist), target, l.equipment_id, l.equipment_id],
           u,
           "辦理設備領用",
           target,
@@ -626,18 +739,22 @@ export async function handle(req: Request) {
         );
       } else if (action === "return") {
         assert(
-          ["admin", "custodian"].includes(u.role),
-          "僅設備管理員可辦理歸還",
+          canManageEquipment(u),
+          "僅工程人員、設備箱管理員或系統管理員可辦理歸還",
           403,
         );
         assert(note, "請填寫歸還檢查紀錄");
+        const checklist = checklistInput(b.checklist, list<KitPart>(l.manifest), "return");
+        const issue = checklist.some((row) => row.condition !== "ok");
         await logged(
-          "UPDATE loans SET status='returned',returned=?,return_note=?,updated=? WHERE id=? AND status='borrowed'",
-          [stamp, note, stamp, target],
+          "UPDATE loans SET status='returned',returned=?,return_note=?,updated=?,return_check=? WHERE id=? AND status='borrowed'",
+          [stamp, note, stamp, JSON.stringify(checklist), target],
           u,
           "完成設備歸還",
           target,
           note,
+          undefined,
+          issue ? [statement("UPDATE equipment SET condition='maintenance' WHERE id=? AND EXISTS(SELECT 1 FROM loans WHERE id=? AND status='returned' AND returned=?)", [l.equipment_id, target, stamp])] : [],
         );
       } else throw new ApiError("找不到操作", 404);
       return respond({ ok: true });
@@ -657,7 +774,7 @@ export async function handle(req: Request) {
             email(b),
             text(b, "department", 60),
             role,
-            await hashPassword(text(b, "password", 128)),
+            await hashPassword(passwordText(b, "password")),
             1,
             1,
             now(),
@@ -689,7 +806,7 @@ export async function handle(req: Request) {
         "啟用範例成員前，請先設定臨時密碼",
       );
       const password = b.password
-        ? await hashPassword(text(b, "password", 128))
+        ? await hashPassword(passwordText(b, "password"))
         : null;
       await db().batch([
         statement(
@@ -739,20 +856,20 @@ export async function handle(req: Request) {
     throw new ApiError("找不到此功能", 404);
   } catch (error) {
     if (error instanceof ApiError)
-      return respond({ error: error.message }, {}, error.status);
+      return respond({ error: translateSystem(error.message, req.headers.get("accept-language")), ...error.details }, {}, error.status);
     if (error instanceof Error && /UNIQUE constraint/.test(error.message))
       return respond(
-        { error: "帳號或設備編號已存在，或系統已初始化，請更換後再試" },
+        { error: translateSystem("帳號或設備編號已存在，或系統已初始化，請更換後再試", req.headers.get("accept-language")) },
         {},
         409,
       );
     if (error instanceof Error && error.message.startsWith("密碼需為"))
-      return respond({ error: error.message }, {}, 400);
+      return respond({ error: translateSystem(error.message, req.headers.get("accept-language")) }, {}, 400);
     console.error(
       "API failure",
       error instanceof Error ? error.message : "unknown",
     );
-    return respond({ error: "系統暫時無法處理，請稍後再試" }, {}, 500);
+    return respond({ error: translateSystem("系統暫時無法處理，請稍後再試", req.headers.get("accept-language")) }, {}, 500);
   }
 }
 function respond(
