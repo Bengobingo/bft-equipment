@@ -29,7 +29,7 @@ async function go(route, title) { await page.eval(route => location.hash = route
 const state = () => page.eval(async () => (await fetch("/api/state")).json());
 async function shot(name, width = 1440, height = 1000) { await page.setViewport({ width, height, mobile: width < 600 }); await pause(100); assert(await page.eval(() => document.documentElement.scrollWidth <= innerWidth + 1), "Horizontal page overflow: " + name); checks++; await page.screenshot({ path: `${out}/${name}.png`, format: "png" }); }
 function client() { let cookie = ""; return async (path, body, method = "POST") => { const r = await fetch(base + "/api/" + path, { method, headers: { Origin: base, "Content-Type": "application/json", Cookie: cookie }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); const data = await r.json(); assert.equal(r.status, 200, `${method} ${path}: ${data.error || "failed"}`); if (r.headers.get("set-cookie")) cookie = r.headers.get("set-cookie").split(";")[0]; return data; }; }
-async function newBorrow(equipmentId, purpose) { await go("loans", "Production loans"); await click("Request a kit"); await until(() => !!document.querySelector("dialog[open]"), "borrow dialog"); await field("equipment_id", equipmentId); await field("production_line", "FCT-02 / Line A"); await field("work_order", "WO-UI-001"); await field("product_model", "Server Platform QA"); await field("purpose", purpose); }
+async function newBorrow(equipmentId, purpose) { await go("loans", "Production loans"); await click("Request a kit"); await until(() => !!document.querySelector("dialog[open]"), "borrow dialog"); assert.equal(await page.eval(() => document.querySelector('[name="production_line"]').closest("label").querySelector("span").textContent), "Fixture"); assert.equal(await page.eval(() => document.querySelectorAll('dialog [name="work_order"]').length), 0); checks += 2; await field("equipment_id", equipmentId); await field("production_line", "FCT-02"); await field("product_model", "Server Platform QA"); await field("purpose", purpose); }
 async function rowAction(name, action) { assert(await page.eval(({ name, action }) => { const row = [...document.querySelectorAll(".loan-table tbody tr")].find(row => row.textContent.includes(name)); const control = row && [...row.querySelectorAll("button")].find(button => button.textContent.trim() === action); if (!control) return false; control.click(); return true; }, { name, action })); checks++; await pause(100); }
 try {
   await page.goto(base, { settleMs: 500 }); await until(() => !!document.querySelector('[name="username"]'), "sign-in");
@@ -68,9 +68,18 @@ try {
   assert.equal(await page.eval(() => document.querySelectorAll('dialog [name="code"], dialog [name="serial"], dialog [name="brand"]').length), 0); checks++;
   await shot("simplified-edit-en-dark"); await click("Save kit"); await until(() => !document.querySelector("dialog[open]"), "simplified edit saved");
   assert.equal((await state()).equipment.find(row => row.id === kit.id).code, kit.code); checks++;
-  stage = "admin production request"; await newBorrow(kit.id, "Server production validation"); await page.eval(() => { const form = document.querySelector("dialog[open] form"); form.requestSubmit(); form.requestSubmit(); });
+  stage = "admin production request"; await newBorrow(kit.id, "Server production validation");
+  await shot("fixture-request-en-dark");
+  await page.eval(() => document.querySelector(".language-toggle").click()); await until(() => document.documentElement.lang === "zh-Hant", "Chinese fixture form");
+  assert.equal(await page.eval(() => document.querySelector('[name="production_line"]').closest("label").querySelector("span").textContent), "站別");
+  assert(!(await page.eval(() => document.querySelector("dialog[open]").textContent.includes("生產工單")))); checks += 2;
+  await shot("fixture-request-zh-dark-390", 390, 844);
+  await page.eval(() => document.querySelector(".language-toggle").click()); await until(() => document.documentElement.lang === "en", "English fixture form");
+  assert.equal(await page.eval(() => document.querySelector('[name="production_line"]').value), "FCT-02"); checks++;
+  await page.eval(() => { const form = document.querySelector("dialog[open] form"); form.requestSubmit(); form.requestSubmit(); });
   await until(() => location.hash === "#approvals/submitted" && !document.querySelector("dialog[open]"), "own request routed to submitted queue");
   let current = await state(); const own = current.loans.filter(loan => loan.equipment_id === kit.id); assert.equal(own.length, 1); assert.equal(own[0].status, "pending"); assert.equal(own[0].manifest.length, 5); checks += 3;
+  assert.equal(own[0].production_line, "FCT-02"); assert.equal(own[0].work_order, ""); checks += 2;
   assert(!(await page.eval(() => [...document.querySelectorAll(".loan-table button")].some(button => button.textContent.trim() === "Review")))); checks++;
   await page.goto(base + "/?qa=" + Date.now() + "#approvals/submitted", { settleMs: 500 }); await until(() => !!document.querySelector(".loan-table"), "saved request after reload"); assert.equal(await page.eval(() => document.documentElement.dataset.theme), "dark"); assert.equal(await page.eval(() => document.documentElement.lang), "en"); checks += 2;
   await newBorrow(kit.id, "Duplicate form data must be retained"); await click("Submit production request"); await until(() => document.querySelector("dialog[open] [role=alert]")?.textContent.includes("already have a request"), "English duplicate error");
@@ -92,7 +101,7 @@ try {
   await adminApi("equipment", { ...kit, code: undefined, name: engineerKitName, condition: "ready" });
   const engineerKit = (await adminApi("state", undefined, "GET")).equipment.find(row => row.name === engineerKitName);
   const engineerToday = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
-  await adminApi("loans", { equipment_id: engineerKit.id, start: engineerToday, end: engineerToday, production_line: "PED / FCT-01", work_order: "WO-ENGINEER-UI", product_model: "Server QA", purpose: "Engineer review and handover validation" });
+  await adminApi("loans", { equipment_id: engineerKit.id, start: engineerToday, end: engineerToday, production_line: "FCT-01", product_model: "Server QA", purpose: "Engineer review and handover validation" });
   await go("settings"); await click("Sign out"); await until(() => !!document.querySelector('[name="username"]'), "engineer sign-in screen");
   await field("username", reviewer); await field("password", newPassword); await click("Sign in"); await until(() => document.querySelector(".sheet h1")?.textContent === "Production support", "engineer dashboard");
   assert(await page.eval(() => document.querySelector(".sidebar-account").textContent.includes("PED engineer")));
@@ -121,6 +130,26 @@ try {
   await field("currentPassword", password); await field("newPassword", newPassword); await fill('.settings-form input[autocomplete="new-password"]', newPassword, 1); await click("Save account changes"); await until(() => document.querySelector(".sheet h1")?.textContent === "Production support", "operator activated"); assert.equal(await page.eval(() => document.querySelector(".top-avatar .avatar").textContent), "Ben"); checks++;
   assert(!(await page.eval(() => document.querySelector(".sidebar nav").textContent.includes("PED approval center")))); assert(!(await page.eval(() => document.querySelector(".sidebar nav").textContent.includes("Members & permissions")))); checks += 2;
   await newBorrow(operatorKit.id, "Production functional test on Line A"); await click("Submit production request"); await until(() => location.hash === "#loans/pending" && !document.querySelector("dialog[open]"), "operator request"); current = await state(); assert(current.loans.length === 1 && current.loans.every(loan => loan.user_id === current.user.id)); checks++;
+  const operatorLoan = current.loans[0]; assert.equal(operatorLoan.production_line, "FCT-02"); assert.equal(operatorLoan.work_order, ""); checks += 2;
+  stage = "operator request full lifecycle";
+  await go("settings"); await click("Sign out"); await until(() => !!document.querySelector('[name="username"]'), "admin sign-in for operator request");
+  await field("username", auth.username); await field("password", auth.password); await click("Sign in"); await until(() => document.querySelector(".sheet h1")?.textContent === "Production support", "admin review dashboard");
+  await go("approvals"); await rowAction(operatorKitName, "Review"); await field("note", "Fixture FCT-02 production request approved"); await click("Approve request"); await until(() => !document.querySelector("dialog[open]"), "operator request approved");
+  assert.equal((await state()).loans.find(row => row.id === operatorLoan.id).status, "approved"); checks++;
+  await go("loans/approved"); await rowAction(operatorKitName, "Issue"); await until(() => !!document.querySelector(".checklist"), "operator kit issue checklist");
+  await page.eval(() => document.querySelectorAll(".check-identity input").forEach(input => input.click())); await field("note", "All five component types verified for fixture FCT-02"); await click("Confirm kit issue"); await until(() => !document.querySelector("dialog[open]"), "operator kit issued");
+  assert.equal((await state()).loans.find(row => row.id === operatorLoan.id).status, "borrowed"); checks++;
+  await go("loans/borrowed"); await rowAction(operatorKitName, "Return"); await until(() => !!document.querySelector(".checklist"), "operator kit return checklist");
+  await page.eval(() => document.querySelectorAll(".check-identity input").forEach(input => input.click())); await field("note", "Fixture FCT-02 return complete; quantities and serials match"); await click("Confirm return"); await until(() => !document.querySelector("dialog[open]"), "operator kit returned");
+  current = await state(); const completedLoan = current.loans.find(row => row.id === operatorLoan.id);
+  assert.equal(completedLoan.status, "returned"); assert.equal(completedLoan.production_line, "FCT-02"); assert.equal(completedLoan.work_order, ""); assert.equal(completedLoan.checkout_check.length, 5); assert.equal(completedLoan.return_check.length, 5); assert.equal(current.equipment.find(row => row.id === operatorKit.id).condition, "ready"); checks += 6;
+  await go("loans/returned"); await page.eval(id => { const input = document.querySelector("#workspace-search"); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, id); input.dispatchEvent(new Event("input", { bubbles: true })); }, operatorKit.code);
+  await rowAction(operatorKitName, ""); await until(() => document.querySelector("dialog[open] h2")?.textContent === "Kit loan details", "completed fixture details");
+  assert(await page.eval(() => [...document.querySelectorAll(".detail-grid small")].some(element => element.textContent === "Fixture"))); assert(!(await page.eval(() => document.querySelector("dialog[open]").textContent.includes("Work order")))); checks += 2;
+  await shot("fixture-returned-details-en-dark"); await click("Close"); await fill("#workspace-search", "");
+  await go("reports"); assert(await page.eval(() => document.querySelector(".report-grid").textContent.includes("By fixture"))); checks++;
+  await go("loans/returned");
+  console.log("Production operator request without work order, approval, issue, return inspection and fixture reports passed.");
   await page.eval(() => document.querySelector(".language-toggle").click()); await page.eval(() => document.querySelector(".theme-toggle").click()); await until(() => document.documentElement.lang === "zh-Hant" && document.documentElement.dataset.theme === "light", "restore Chinese light"); await shot("production-request-zh-light-390", 390, 844);
   assert.equal(page.consoleErrors.length, 0, JSON.stringify(page.consoleErrors)); assert.equal(external.size, 0); checks += 2;
   writeFileSync(`${out}/report.json`, JSON.stringify({ ok: true, checks, findings, externalRequests: [...external], consoleErrors: page.consoleErrors }, null, 2));

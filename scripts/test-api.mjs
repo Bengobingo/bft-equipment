@@ -186,11 +186,13 @@ const loan = {
   start: today,
   end: today,
   purpose: "整合測試：借用至歸還",
-  production_line: "SMT-01 / FCT-02",
-  work_order: "WO-QA-001",
+  production_line: "FCT-02",
   product_model: "Server validation platform",
 };
 const checklist = testEquipment.components.map(part => ({ id: part.id, quantity: part.quantity, condition: "ok", checked: true }));
+await employee("loans", "POST", { ...loan, production_line: "" }, 400);
+await employee("loans", "POST", { ...loan, production_line: " ".repeat(2) }, 400);
+await employee("loans", "POST", { ...loan, production_line: "F".repeat(61) }, 400);
 await employee("loans", "POST", { ...loan, end: "2026-02-30" }, 400);
 await employee(
   "loans",
@@ -208,7 +210,9 @@ d = await employee("state");
 assert.equal(d.users.length, 0);
 assert(d.loans.every((l) => l.user_id === d.user.id));
 assert(d.loans.find((x) => x.id === l.id));
-checks += 3;
+assert.equal(d.loans.find((x) => x.id === l.id).production_line, "FCT-02");
+assert.equal(d.loans.find((x) => x.id === l.id).work_order, "");
+checks += 5;
 await employee(`loans/${l.id}/approve`, "POST", {}, 403);
 await custodian(`loans/${l.id}/approve`, "POST", {}, 403);
 await custodian(`loans/${l.id}/checkout`, "POST", {}, 409);
@@ -241,7 +245,9 @@ const unavailable = await employee("loans", "POST", loan, 409);
 assert.equal(unavailable.code, "equipment_unavailable");
 checks++;
 await admin("equipment/" + eq.id, "PUT", testEquipment);
-const cancel = await employee("loans", "POST", loan);
+const cancel = await employee("loans", "POST", { ...loan, work_order: "WO-HISTORICAL-COMPATIBILITY" });
+assert.equal((await employee("state")).loans.find(row => row.id === cancel.id).work_order, "WO-HISTORICAL-COMPATIBILITY");
+checks++;
 await employee(`loans/${cancel.id}/cancel`, "POST", {});
 const reject = await employee("loans", "POST", loan);
 await approver(`loans/${reject.id}/reject`, "POST", { note: "" }, 400);
@@ -340,7 +346,7 @@ assert(domainState.loans.some(row => row.id === domainLoan.id));
 assert.equal(domainState.users.length, 0);
 const originalManifest = domainState.loans.find(row => row.id === domainLoan.id).manifest;
 assert.equal(originalManifest.length, 5);
-assert.equal(domainState.loans.find(row => row.id === domainLoan.id).work_order, loan.work_order);
+assert.equal(domainState.loans.find(row => row.id === domainLoan.id).work_order, "");
 assert.equal(domainState.equipment.find(row => row.id === eq.id).reserved, 1);
 checks += 5;
 const altered = testEquipment.components.map((part, index) => index === 0 ? { ...part, quantity: 4 } : part);

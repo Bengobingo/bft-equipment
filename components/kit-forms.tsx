@@ -56,10 +56,9 @@ export function BorrowForm({ data, equipment, conflictLoanId, onExisting, ...pro
     <div className="form-grid">
       <Field label={tx("借用日期", "Start date")}><input type="date" name="start" min={taipeiDate()} value={start} onChange={event => { setStart(event.target.value); if (event.target.value > end) setEnd(event.target.value); }} required /></Field>
       <Field label={tx("預計歸還日期", "Expected return")}><input type="date" name="end" min={start} value={end} onChange={event => setEnd(event.target.value)} required /></Field>
-      <Field label={tx("使用產線／站別", "Production line / station")}><input name="production_line" required maxLength={60} placeholder="SMT-01 / FCT-02" /></Field>
-      <Field label={tx("生產工單／工程單號", "Work order / engineering order")}><input name="work_order" required maxLength={80} placeholder="WO-2026-001" /></Field>
+      <Field label={tx("站別", "Fixture")}><input name="production_line" required maxLength={60} placeholder="FCT-02" /></Field>
+      <Field label={tx("生產機種／平台", "Product model / platform")}><input name="product_model" maxLength={100} placeholder={kit?.model || "Server platform"} /></Field>
     </div>
-    <Field label={tx("生產機種／平台", "Product model / platform")}><input name="product_model" maxLength={100} placeholder={kit?.model || "Server platform"} /></Field>
     <Field label={tx("生產用途說明", "Production purpose")}><textarea name="purpose" required maxLength={1000} rows={3} placeholder={tx("例如：主機板功能測試、CPU / DIMM 驗證、試產或重工測試", "e.g. Mainboard functional test, CPU / DIMM validation, pilot build or rework")} /></Field>
     <p className="borrower-line">{tx("申請人", "Requested by")}：{data.user.name} · {data.user.department}</p>
     {kit && !kit.components.length && <Notice>{tx("此設備箱尚未有零件清單，請先聯絡 PED 完成建檔。", "Contact PED to register the component manifest before requesting this kit.")}</Notice>}
@@ -74,7 +73,7 @@ export function ActionForm({ loan, action, ...props }: Common & { loan: Loan; ac
   const update = (id: string, changes: Partial<PartCheck>) => setChecks(rows => rows.map(row => row.id === id ? { ...row, ...changes } : row));
   const labels = { approve: tx("確認核准", "Approve request"), reject: tx("確認駁回", "Reject request"), checkout: tx("確認點交借出", "Confirm kit issue"), return: tx("確認歸還清點", "Confirm return"), cancel: tx("確認取消申請", "Cancel request") };
   return <form onSubmit={event => props.onSave({ ...formBody(event), ...(handover ? { checklist: checks } : {}) })}><div className="dialog-body"><ErrorBox message={props.error} />
-    <div className="decision-summary"><strong>{loan.equipment_name}</strong><span>{loan.code} · {loan.user_name} · {loan.production_line || loan.department}</span><span className="mono">{loan.work_order || "—"}</span></div>
+    <div className="decision-summary"><strong>{loan.equipment_name}</strong><span>{loan.code} · {loan.user_name} · {loan.production_line || loan.department}</span>{loan.work_order && <span className="mono">{loan.work_order}</span>}</div>
     {handover && <><Notice>{action === "checkout" ? tx("請核對料號、序號與數量，再逐項勾選確認。必須全數齊全正常才能借出。", "Verify P/N, S/N and quantity, then check each entry. All components must be complete and working before issue.") : tx("逐項記錄實際歸還數量與狀況。有缺件或損壞時，設備箱將轉為待維護／補件。", "Record actual quantities and conditions. Any missing or damaged component places the kit in maintenance.")}</Notice>
       {!loan.manifest.length && <Notice>{tx("此為舊版建立的歷史申請，沒有零件快照，請於檢查紀錄說明實際點交內容。", "This historical request has no manifest snapshot. Describe the physical contents in the inspection note.")}</Notice>}
       <div className="checklist">{loan.manifest.map((part, index) => <div className="check-row" key={part.id}>

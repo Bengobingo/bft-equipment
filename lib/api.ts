@@ -596,7 +596,7 @@ export async function handle(req: Request) {
         end = text(b, "end", 10),
         purpose = text(b, "purpose", 1000),
         productionLine = text(b, "production_line", 60),
-        workOrder = text(b, "work_order", 80),
+        workOrder = text({ work_order: "", ...b }, "work_order", 80, true),
         productModel = text(b, "product_model", 100, true),
         settings = await config();
       assert(
