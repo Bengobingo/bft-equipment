@@ -13,7 +13,7 @@ import { PreferencesProvider } from "@/components/preferences";
 
 export const metadata: Metadata = {
   title: "BFT PED｜工程設備箱管理",
-  description: "伺服器工廠 PED 工程設備箱、零件清單、產線借用、簽核與點交管理。Engineering kit control for server manufacturing.",
+  description: "伺服器工廠 PED 工程設備箱、零件清單、產線借用、簽核與點交管理。Engineering box control for server manufacturing.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

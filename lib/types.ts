@@ -1,7 +1,7 @@
 export const roles = {
   employee: "產線操作人員",
   approver: "PED 工程人員",
-  admin: "PED 系統管理員",
+  admin: "系統管理員",
 } as const;
 export type Role = keyof typeof roles;
 export type User = {
@@ -31,11 +31,13 @@ export type Equipment = {
   reserved?: number;
   components: KitPart[];
 };
-export const partTypes = ["CPU", "DIMM", "Cable", "U.2", "Heatsink", "Other"] as const;
+export const partTypes = ["CPU", "Memory", "Motherboard", "Storage", "PCIe/Expansion", "Network", "Power", "Cable", "Heatsink", "Other"] as const;
+export const legacyPartTypes = ["DIMM", "U.2"] as const;
 export type KitPart = {
   id: string;
-  type: (typeof partTypes)[number];
+  type: (typeof partTypes)[number] | (typeof legacyPartTypes)[number];
   name: string;
+  specification?: string;
   partNumber: string;
   serial: string;
   quantity: number;
@@ -109,6 +111,14 @@ export function taipeiDate(date = new Date()) {
     day: "2-digit",
   }).format(date);
 }
+const requestNumberDate = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Asia/Taipei", year: "2-digit", month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+});
+export function requestId(loan: Pick<Loan, "created">) {
+  const parts = requestNumberDate.formatToParts(new Date(loan.created));
+  return "BR" + ["year", "month", "day", "hour", "minute"].map(key => parts.find(part => part.type === key)!.value).join("");
+}
 export function overdue(l: Loan) {
   return l.status === "borrowed" && l.end < taipeiDate();
 }
@@ -116,11 +126,17 @@ export function canApprove(u: User, l: Loan) {
   return (
     l.status === "pending" &&
     l.user_id !== u.id &&
-    canReviewDepartment(u, l.department)
+    canReviewLoans(u)
   );
 }
-export function canReviewDepartment(u: Pick<User, "role" | "department">, department: string) {
-  return u.role === "admin" || (u.role === "approver" && u.department === department);
+export function canReviewLoans(u: Pick<User, "role">) {
+  return u.role === "admin" || u.role === "approver";
+}
+export function canReturnLoan(u: Pick<User, "id" | "role">, loan: Pick<Loan, "user_id" | "status">) {
+  return loan.status === "borrowed" && (u.id === loan.user_id || canManageEquipment(u));
+}
+export function canRequestEquipment(equipment: Pick<Equipment, "condition" | "components" | "busy">) {
+  return equipment.condition === "ready" && equipment.components.length > 0 && !equipment.busy;
 }
 export function canManageEquipment(u: Pick<User, "role">) {
   return ["admin", "approver"].includes(u.role);

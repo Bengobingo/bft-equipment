@@ -152,14 +152,24 @@ const testEquipment = {
   location: "測試庫房",
   condition: "ready",
   notes: "測試充電器與保護套",
-  components: ["CPU", "DIMM", "Cable", "U.2", "Heatsink"].map((type, index) => ({ id: `qa-part-${index}`, type, name: `${type} validation component`, partNumber: `PN-${index}`, serial: `SN-${index}`, quantity: index === 1 ? 8 : 2 })),
+  components: ["CPU", "Memory", "Cable", "Storage", "Heatsink"].map((type, index) => ({ id: `qa-part-${index}`, type, name: `${type} validation component`, specification: `Spec-${index}`, partNumber: `PN-${index}`, serial: `SN-${index}`, quantity: index === 1 ? 8 : 2 })),
 };
 await admin("equipment", "POST", testEquipment);
 await admin("equipment", "POST", testEquipment, 409);
 d = await admin("state");
 const eq = d.equipment.find((e) => e.code === testEquipment.code);
 assert(eq);
-checks++;
+assert.equal(eq.components[0].specification, "Spec-0");
+assert.equal(eq.components[0].serial, "SN-0");
+await admin("equipment", "POST", { ...testEquipment, code: "INVALID-" + suffix, components: [{ ...testEquipment.components[0], specification: "x".repeat(101) }] }, 400);
+checks += 3;
+const categoryTypes = ["CPU", "Memory", "Motherboard", "Storage", "PCIe/Expansion", "Network", "Power", "Cable", "Heatsink", "Other", "DIMM", "U.2"];
+const categoryEquipment = { ...testEquipment, code: "CAT-" + suffix, components: categoryTypes.map((type, index) => ({ ...testEquipment.components[0], id: `category-${index}`, type })) };
+await admin("equipment", "POST", categoryEquipment);
+const categorySaved = (await admin("state")).equipment.find(row => row.code === categoryEquipment.code);
+assert.deepEqual(categorySaved.components.map(part => part.type), categoryTypes);
+await admin(`equipment/${categorySaved.id}`, "PUT", { ...categoryEquipment, name: "Updated legacy categories" });
+assert.deepEqual((await admin("state")).equipment.find(row => row.id === categorySaved.id).components.map(part => part.type), categoryTypes);
 // Simplified kit forms omit code, brand and kit serial; legacy values must survive edits.
 const simplifiedKit = { ...testEquipment, name: "Simplified PED kit" };
 delete simplifiedKit.code; delete simplifiedKit.brand; delete simplifiedKit.serial;
@@ -180,6 +190,12 @@ assert(automaticKits.every(row => /^PED-\d{4,}$/.test(row.code) && row.brand ===
 assert.deepEqual(automaticKits.map(row => row.code).sort(), ["PED-0001", "PED-0002"]);
 checks++;
 checks += 3;
+await admin(`equipment/${eq.id}`, "PUT", testEquipment);
+const legacyParts = testEquipment.components.map(part => { const copy = { ...part }; delete copy.specification; return copy; });
+await admin(`equipment/${eq.id}`, "PUT", { ...testEquipment, components: legacyParts });
+const legacySaved = (await admin("state")).equipment.find(row => row.id === eq.id);
+assert.equal(legacySaved.components[0].serial, "SN-0");
+assert.equal(legacySaved.components[0].specification, undefined);
 await admin(`equipment/${eq.id}`, "PUT", testEquipment);
 const today = new Intl.DateTimeFormat("en-CA", {
   timeZone: "Asia/Taipei",
@@ -233,15 +249,40 @@ await employee(`loans/${l.id}/checkout`, "POST", {}, 403);
 await approver(`loans/${l.id}/checkout`, "POST", { note: "配件齊全" }, 400);
 await approver(`loans/${l.id}/checkout`, "POST", { note: "配件齊全", checklist: checklist.slice(1) }, 400);
 await approver(`loans/${l.id}/checkout`, "POST", { note: "配件齊全", checklist });
+const tomorrow = new Date(Date.parse(today + "T00:00:00Z") + 86400000).toISOString().slice(0, 10);
+const futureRequest = { ...loan, start: tomorrow, end: tomorrow };
+const borrowerState = await employee("state");
+assert.equal(borrowerState.equipment.find(row => row.id === eq.id).busy, 1);
+assert(borrowerState.loans.filter(row => row.status === "borrowed").every(row => row.user_id === borrowerState.user.id));
+const unavailableFuture = await admin("loans", "POST", futureRequest, 409);
+assert.equal(unavailableFuture.code, "equipment_borrowed");
+assert.equal(unavailableFuture.loanId, undefined);
+const ownFuture = await employee("loans", "POST", futureRequest, 409);
+assert.equal(ownFuture.code, "own_reservation");
+assert.equal(ownFuture.loanId, l.id);
+checks += 6;
 await employee(`loans/${l.id}/cancel`, "POST", {}, 409);
-await approver(`loans/${l.id}/return`, "POST", { note: "" }, 400);
-await approver(`loans/${l.id}/return`, "POST", { note: "設備正常，配件完整", checklist });
+const unrelatedOperator = client();
+const unrelatedUsername = `qa.return.other.${suffix}`;
+await admin("users", "POST", { username: unrelatedUsername, name: "Other operator", email: "", department: "測試部門", role: "employee", password });
+await unrelatedOperator("login", "POST", { username: unrelatedUsername, password });
+await unrelatedOperator("account", "PUT", { username: unrelatedUsername, name: "Other operator", email: "", currentPassword: password, newPassword });
+await unrelatedOperator(`loans/${l.id}/return`, "POST", { note: "不得歸還他人的設備箱", checklist }, 403);
+await employee(`loans/${l.id}/return`, "POST", { note: "", checklist }, 400);
+await employee(`loans/${l.id}/return`, "POST", { note: "尚未完整清點", checklist: checklist.slice(1) }, 400);
+await employee(`loans/${l.id}/return`, "POST", { note: "尚未勾選確認", checklist: checklist.map(row => ({ ...row, checked: false })) }, 400);
+await employee(`loans/${l.id}/return`, "POST", { note: "設備正常，配件完整", checklist });
+await employee(`loans/${l.id}/return`, "POST", { note: "重複歸還", checklist }, 409);
 d = await employee("state");
 const returned = d.loans.find((x) => x.id === l.id);
 assert.equal(returned.status, "returned");
 assert.equal(returned.return_note, "設備正常，配件完整");
 assert(returned.checked_out && returned.returned);
-checks += 3;
+assert.equal(d.equipment.find(row => row.id === eq.id).busy, 0);
+assert(!d.loans.some(row => row.id === l.id && row.status === "borrowed"));
+const afterReturn = await admin("loans", "POST", futureRequest);
+await admin(`loans/${afterReturn.id}/cancel`, "POST", {});
+checks += 5;
 await admin("equipment/" + eq.id, "PUT", {
   ...testEquipment,
   condition: "maintenance",
@@ -280,12 +321,16 @@ await cross("account", "PUT", {
   newPassword,
 });
 const pending = await employee("loans", "POST", loan);
-await cross(`loans/${pending.id}/approve`, "POST", {}, 403);
-await cross(`loans/${pending.id}/reject`, "POST", { note: "跨部門不可駁回" }, 403);
+await employee(`loans/${pending.id}/approve`, "POST", {}, 403);
+await cross(`loans/${pending.id}/approve`, "POST", { note: "跨部門核准" });
 const crossData = await cross("state");
-assert(crossData.loans.some((l) => l.id === pending.id)); // Visible for handovers, not cross-department approval.
+assert.equal(crossData.loans.find(l => l.id === pending.id).status, "approved");
+assert.equal(crossData.loans.find(l => l.id === pending.id).approver_id, crossData.user.id);
 checks++;
 await employee(`loans/${pending.id}/cancel`, "POST", {});
+const crossRejected = await employee("loans", "POST", loan);
+await cross(`loans/${crossRejected.id}/reject`, "POST", { note: "跨部門駁回" });
+assert.equal((await employee("state")).loans.find(row => row.id === crossRejected.id).status, "rejected");
 // Admin borrowing must enter pending exactly once, even under concurrent submissions.
 const beforeAdminLoan = await admin("state");
 const raced = await Promise.all([
@@ -302,7 +347,7 @@ assert.equal(afterAdminLoan.loans.find((l) => l.id === adminLoan.id).status, "pe
 assert.equal(afterAdminLoan.loans.find((l) => l.id === adminLoan.id).user_id, afterAdminLoan.user.id);
 checks += 6;
 await admin(`loans/${adminLoan.id}/approve`, "POST", {}, 403);
-await cross(`loans/${adminLoan.id}/approve`, "POST", {}, 403);
+await employee(`loans/${adminLoan.id}/approve`, "POST", {}, 403);
 const otherConflict = await employee("loans", "POST", loan, 409);
 assert.equal(otherConflict.code, "reservation_conflict");
 assert(!otherConflict.loanId && !otherConflict.error.includes(adminLoan.id));
@@ -321,7 +366,7 @@ await secondAdmin(`loans/${adminLoan.id}/approve`, "POST", { note: "由另一位
 assert.equal((await admin("state")).loans.find((l) => l.id === adminLoan.id).status, "approved");
 checks++;
 await admin(`loans/${adminLoan.id}/cancel`, "POST", {});
-// PED engineering staff manage equipment and handovers, but review only their own department.
+// PED engineering staff manage equipment and handovers and review across departments.
 const ped = client();
 await admin("users", "POST", { username: `qa.ped.${suffix}`, name: "PED Engineer", email: "", department: "PED（產品工程部）", role: "approver", password });
 await ped("login", "POST", { username: `qa.ped.${suffix}`, password });
@@ -338,8 +383,8 @@ await ped(`equipment/${engineerEquipment.id}`, "PUT", { ...engineerKit, conditio
 assert.equal((await ped("state")).equipment.find(row => row.id === engineerEquipment.id).condition, "retired"); checks++;
 await ped(`equipment/${engineerEquipment.id}`, "PUT", { ...engineerKit, condition: "ready" });
 const crossDepartmentLoan = await admin("loans", "POST", loan);
-await ped(`loans/${crossDepartmentLoan.id}/approve`, "POST", {}, 403);
-await ped(`loans/${crossDepartmentLoan.id}/reject`, "POST", { note: "PED 部門名稱也不能繞過部門限制" }, 403);
+await ped(`loans/${crossDepartmentLoan.id}/approve`, "POST", { note: "PED 跨部門核准管理員申請" });
+assert.equal((await admin("state")).loans.find(row => row.id === crossDepartmentLoan.id).status, "approved");
 await admin(`loans/${crossDepartmentLoan.id}/cancel`, "POST", {});
 const pedOperator = client();
 await admin("users", "POST", { username: `qa.ped.operator.${suffix}`, name: "PED operator", email: "", department: "PED（產品工程部）", role: "employee", password });
@@ -351,6 +396,8 @@ assert(domainState.loans.some(row => row.id === domainLoan.id));
 assert.equal(domainState.users.length, 0);
 const originalManifest = domainState.loans.find(row => row.id === domainLoan.id).manifest;
 assert.equal(originalManifest.length, 5);
+assert.equal(originalManifest[0].specification, "Spec-0");
+await ped(`equipment/${eq.id}`, "PUT", testEquipment);
 assert.equal(domainState.loans.find(row => row.id === domainLoan.id).work_order, "");
 assert.equal(domainState.equipment.find(row => row.id === eq.id).reserved, 1);
 checks += 5;
@@ -372,6 +419,7 @@ const replacementLoan = await admin("loans", "POST", loan);
 const changedState = await admin("state");
 assert.deepEqual(changedState.loans.find(row => row.id === domainLoan.id).manifest, originalManifest);
 assert.equal(changedState.loans.find(row => row.id === replacementLoan.id).manifest[0].quantity, 4);
+assert.equal(changedState.loans.find(row => row.id === replacementLoan.id).manifest[0].specification, "Spec-0");
 checks += 2;
 const englishDuplicate = await admin("loans", "POST", loan, 409, base, "en");
 assert.match(englishDuplicate.error, /already have a request/);
@@ -451,6 +499,6 @@ console.log(
     checks,
     localAdmin: { username: "qa.admin", password },
     summary:
-      "Setup, RBAC, operator data isolation, same-department engineer approval, cross-department approval denial, engineer equipment management and handovers, forced password change, CSRF, duplicate assets, invalid dates, overlapping reservations, self-approval prevention, checkout, return, cancellation, rejection, session revocation, disabled users, CSV source data and rate limits passed.",
+      "Setup, RBAC, operator data isolation, same-department and cross-department engineer approval and rejection, engineer equipment management and handovers, forced password change, CSRF, duplicate assets, invalid dates, overlapping reservations, self-approval prevention, checkout, return, cancellation, rejection, session revocation, disabled users, CSV source data and rate limits passed.",
   }),
 );

@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { digest, hashPassword, randomToken, verifyPassword } from "./security";
-import { roles, statusNames, taipeiDate, canReviewDepartment, canManageEquipment, partTypes, type User, type Loan, type KitPart, type PartCheck } from "./types";
+import { roles, statusNames, taipeiDate, canReviewLoans, canManageEquipment, partTypes, legacyPartTypes, type User, type Loan, type KitPart, type PartCheck } from "./types";
 import { sampleEquipment, sampleParts } from "./seed";
 import { translateSystem } from "./messages";
 
@@ -155,9 +155,10 @@ function componentInput(value: unknown): KitPart[] {
     const partId = text(part, "id", 80);
     assert(!seen.has(partId), "零件識別碼不可重複");
     seen.add(partId);
-    assert(partTypes.includes(part.type as KitPart["type"]), "零件類別不正確");
+    assert([...partTypes, ...legacyPartTypes].includes(part.type as KitPart["type"]), "零件類別不正確");
     assert(Number.isInteger(part.quantity) && Number(part.quantity) >= 1 && Number(part.quantity) <= 10000, "零件數量必須為 1–10000 的整數");
-    return { id: partId, type: part.type as KitPart["type"], name: text(part, "name", 100), partNumber: text(part, "partNumber", 100, true), serial: text(part, "serial", 100, true), quantity: Number(part.quantity) };
+    const specification = text({ specification: "", ...part }, "specification", 100, true);
+    return { id: partId, type: part.type as KitPart["type"], name: text(part, "name", 100), partNumber: text(part, "partNumber", 100, true), serial: text({ serial: "", ...part }, "serial", 100, true), quantity: Number(part.quantity), ...(specification ? { specification } : {}) };
   });
 }
 function checklistInput(value: unknown, manifest: KitPart[], action: "checkout" | "return"): PartCheck[] {
@@ -620,7 +621,7 @@ export async function handle(req: Request) {
       const target = id(),
         stamp = now();
       await logged(
-        "INSERT INTO loans (id,equipment_id,user_id,department,start,end,purpose,status,created,updated,production_line,work_order,product_model,manifest) SELECT ?,?,?,?,?,?,?,'pending',?,?,?,?,?,components FROM equipment WHERE id=? AND condition='ready' AND components!='[]' AND NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status IN ('pending','approved','borrowed') AND start<=? AND end>=?) AND NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status='borrowed' AND end<?)",
+        "INSERT INTO loans (id,equipment_id,user_id,department,start,end,purpose,status,created,updated,production_line,work_order,product_model,manifest) SELECT ?,?,?,?,?,?,?,'pending',?,?,?,?,?,components FROM equipment WHERE id=? AND condition='ready' AND components!='[]' AND NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status IN ('pending','approved','borrowed') AND start<=? AND end>=?) AND NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status='borrowed')",
         [
           target,
           equipmentId,
@@ -639,7 +640,6 @@ export async function handle(req: Request) {
           end,
           start,
           equipmentId,
-          taipeiDate(),
         ],
         u,
         "提出借用申請",
@@ -648,8 +648,8 @@ export async function handle(req: Request) {
         async () => {
           // Diagnose only after the atomic insert fails; never weaken its guards.
           const own = await first<Loan>(
-            "SELECT * FROM loans WHERE equipment_id=? AND user_id=? AND status IN ('pending','approved','borrowed') AND ((start<=? AND end>=?) OR (status='borrowed' AND end<?)) ORDER BY created DESC LIMIT 1",
-            [equipmentId, u.id, end, start, taipeiDate()],
+            "SELECT * FROM loans WHERE equipment_id=? AND user_id=? AND status IN ('pending','approved','borrowed') AND ((start<=? AND end>=?) OR status='borrowed') ORDER BY created DESC LIMIT 1",
+            [equipmentId, u.id, end, start],
           );
           if (own)
             throw new ApiError(
@@ -666,6 +666,9 @@ export async function handle(req: Request) {
               { code: "equipment_unavailable" });
           if (!list(equipment.components).length)
             throw new ApiError("設備箱尚未建立零件清單，請先由 PED 完成建檔。", 409, { code: "manifest_required" });
+          const borrowed = await first<{ id: string }>("SELECT id FROM loans WHERE equipment_id=? AND status='borrowed' LIMIT 1", [equipmentId]);
+          if (borrowed)
+            throw new ApiError("設備箱已借出，歸還後才能申請。", 409, { code: "equipment_borrowed" });
           throw new ApiError(
             "此設備的借用時段已被預約，或有逾期未歸還的借用。待簽核申請也會保留時段，請調整日期或選擇其他設備。",
             409,
@@ -684,8 +687,8 @@ export async function handle(req: Request) {
       const stamp = now();
       if (action === "approve" || action === "reject") {
         assert(
-          canReviewDepartment(u, l.department) && u.id !== l.user_id,
-          "僅同部門工程人員或系統管理員可簽核，且不得簽核自己的申請",
+          canReviewLoans(u) && u.id !== l.user_id,
+          "僅工程人員或系統管理員可簽核，且不得簽核自己的申請",
           403,
         );
         assert(action !== "reject" || note.length > 0, "請填寫駁回原因");
@@ -739,8 +742,8 @@ export async function handle(req: Request) {
         );
       } else if (action === "return") {
         assert(
-          canManageEquipment(u),
-          "僅工程人員或系統管理員可辦理歸還",
+          canManageEquipment(u) || u.id === l.user_id,
+          "僅借用人、工程人員或系統管理員可辦理歸還",
           403,
         );
         assert(note, "請填寫歸還檢查紀錄");

@@ -38,7 +38,7 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
     if (!ready) return;
     document.documentElement.lang = locale === "en" ? "en" : "zh-Hant";
     document.documentElement.dataset.theme = theme;
-    document.title = locale === "en" ? "BFT PED | Engineering Kit Control" : "BFT PED｜工程設備箱管理";
+    document.title = locale === "en" ? "BFT PED | Engineering Box Control" : "BFT PED｜工程設備箱管理";
     try {
       localStorage.setItem("bft.locale", locale);
       localStorage.setItem("bft.theme", theme);
