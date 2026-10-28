@@ -1,0 +1,1 @@
+ALTER TABLE `return_requests` ADD `self_check` text;

@@ -13,12 +13,14 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { configureToolEnvironment } from "./tool-environment.mjs";
+import { lanUrls, listenHost } from "./local-network.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 process.chdir(root);
 configureToolEnvironment(root);
 const options = {
   port: 3000,
+  lan: false,
   open: false,
   backup: false,
   stop: false,
@@ -26,7 +28,8 @@ const options = {
 };
 for (let i = 2; i < process.argv.length; i++) {
   const argument = process.argv[i];
-  if (argument === "--open") options.open = true;
+  if (argument === "--lan") options.lan = true;
+  else if (argument === "--open") options.open = true;
   else if (argument === "--backup") options.backup = true;
   else if (argument === "--stop") options.stop = true;
   else if (argument === "--port") options.port = Number(process.argv[++i]);
@@ -50,6 +53,10 @@ const stateDir = path.join(dataDir, "state");
 const lockFile = path.join(dataDir, ".running.json");
 const instanceFile = path.join(dataDir, ".instance.json");
 const url = `http://127.0.0.1:${options.port}`;
+const host = listenHost(options.lan);
+function showLanUrls() {
+  if (options.lan) for (const address of lanUrls(options.port)) console.log(`區域網網址 / LAN URL: ${address}`);
+}
 const wrangler = path.join(root, "node_modules/wrangler/bin/wrangler.js");
 const localEnv = {
   ...process.env,
@@ -158,7 +165,7 @@ async function availablePort() {
         ),
       ),
     );
-    probe.listen(options.port, "127.0.0.1", () => probe.close(resolve));
+    probe.listen(options.port, host, () => probe.close(resolve));
   });
 }
 function sourceFingerprint() {
@@ -341,7 +348,11 @@ try {
       existing?.application === "bft-equipment" &&
       existing.instance === instance
     ) {
+      const lock = existsSync(lockFile) ? readJson(lockFile) : null;
+      if (options.lan && lock?.host !== "0.0.0.0")
+        throw new Error("目前以本機模式執行。請先停止系統，再使用 --lan 或 START system.cmd 啟動。");
       console.log(`本機系統已在執行：${url}`);
+      showLanUrls();
       if (options.open) openBrowser();
     } else {
       if (existsSync(lockFile)) {
@@ -358,6 +369,7 @@ try {
         JSON.stringify({
           pid: process.pid,
           port: options.port,
+          host,
           started: new Date().toISOString(),
         }),
         { flag: "wx" },
@@ -427,6 +439,7 @@ try {
         String(options.port),
         stateDir,
         instance,
+        host,
       ]);
       // Attach the rejection handler immediately so a failed startup cannot escape readiness polling.
       let serverFailure;
@@ -453,6 +466,7 @@ try {
         console.log(
           `\nBFT 本機設備系統已就緒：${url}\n首次使用請建立管理員帳號；已有帳號請直接登入。\n`,
         );
+        showLanUrls();
         if (options.open) openBrowser();
       }
       await server;

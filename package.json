@@ -14,7 +14,8 @@
     "stop:local": "node scripts/local-start.mjs --stop",
     "backup:local": "node scripts/local-start.mjs --backup",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "start:lan": "node scripts/local-start.mjs --lan"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

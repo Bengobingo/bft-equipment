@@ -2,9 +2,9 @@ import type { KitPart } from "./types";
 // Optional training data, inserted only into an empty inventory.
 export const sampleEquipment = [
   [
-    "PED-KIT-001",
+    "BOX001",
     "Server Validation Box A",
-    "伺服器整機設備箱",
+    "其他工程設備箱",
     "PED",
     "Server / Dual Socket",
     "DEMO-K001",
@@ -13,9 +13,9 @@ export const sampleEquipment = [
     "DEMO · CPU, DIMM, Cable, U.2 and heatsink validation box"
   ],
   [
-    "PED-KIT-002",
+    "BOX002",
     "CPU / DIMM Box A",
-    "CPU / DIMM 設備箱",
+    "其他工程設備箱",
     "PED",
     "DDR5 RDIMM",
     "DEMO-K002",
@@ -24,9 +24,9 @@ export const sampleEquipment = [
     "DEMO · CPU, DIMM, Cable, U.2 and heatsink validation box"
   ],
   [
-    "PED-KIT-003",
+    "BOX003",
     "U.2 Storage Box",
-    "儲存 / 線材設備箱",
+    "其他工程設備箱",
     "PED",
     "NVMe / U.2",
     "DEMO-K003",
@@ -35,9 +35,9 @@ export const sampleEquipment = [
     "DEMO · CPU, DIMM, Cable, U.2 and heatsink validation box"
   ],
   [
-    "PED-KIT-004",
+    "BOX004",
     "Thermal Validation Box",
-    "散熱 / 治具設備箱",
+    "其他工程設備箱",
     "PED",
     "Server / Thermal",
     "DEMO-K004",
@@ -46,9 +46,9 @@ export const sampleEquipment = [
     "DEMO · CPU, DIMM, Cable, U.2 and heatsink validation box"
   ],
   [
-    "PED-KIT-005",
+    "BOX005",
     "Cable Verification Box",
-    "儲存 / 線材設備箱",
+    "其他工程設備箱",
     "PED",
     "Server / Cable",
     "DEMO-K005",
@@ -57,7 +57,7 @@ export const sampleEquipment = [
     "DEMO · CPU, DIMM, Cable, U.2 and heatsink validation box"
   ],
   [
-    "PED-KIT-006",
+    "BOX006",
     "Mainboard Bring-up Box",
     "主機板測試設備箱",
     "PED",
@@ -68,9 +68,9 @@ export const sampleEquipment = [
     "DEMO · CPU, DIMM, Cable, U.2 and heatsink validation box"
   ],
   [
-    "PED-KIT-007",
+    "BOX007",
     "Fixture Maintenance Box",
-    "散熱 / 治具設備箱",
+    "其他工程設備箱",
     "PED",
     "Server / Fixture",
     "DEMO-K007",
@@ -79,7 +79,7 @@ export const sampleEquipment = [
     "DEMO · CPU, DIMM, Cable, U.2 and heatsink validation box"
   ],
   [
-    "PED-KIT-008",
+    "BOX008",
     "Mainboard Test Box B",
     "主機板測試設備箱",
     "PED",
@@ -90,9 +90,9 @@ export const sampleEquipment = [
     "DEMO · CPU, DIMM, Cable, U.2 and heatsink validation box"
   ],
   [
-    "PED-KIT-009",
+    "BOX009",
     "Pilot Build Box",
-    "伺服器整機設備箱",
+    "其他工程設備箱",
     "PED",
     "Server / Pilot Build",
     "DEMO-K009",
@@ -101,9 +101,9 @@ export const sampleEquipment = [
     "DEMO · CPU, DIMM, Cable, U.2 and heatsink validation box"
   ],
   [
-    "PED-KIT-010",
+    "BOX010",
     "DIMM Screening Box",
-    "CPU / DIMM 設備箱",
+    "其他工程設備箱",
     "PED",
     "DDR5 / Memory",
     "DEMO-K010",
@@ -112,9 +112,9 @@ export const sampleEquipment = [
     "DEMO · CPU, DIMM, Cable, U.2 and heatsink validation box"
   ],
   [
-    "PED-KIT-011",
+    "BOX011",
     "Engineering Fixture Box",
-    "散熱 / 治具設備箱",
+    "其他工程設備箱",
     "PED",
     "Server / Engineering",
     "DEMO-K011",
@@ -123,7 +123,7 @@ export const sampleEquipment = [
     "DEMO · CPU, DIMM, Cable, U.2 and heatsink validation box"
   ],
   [
-    "PED-KIT-012",
+    "BOX012",
     "Production Rework Box",
     "其他工程設備箱",
     "PED",

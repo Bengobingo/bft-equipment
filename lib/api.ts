@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { digest, hashPassword, randomToken, verifyPassword } from "./security";
-import { roles, statusNames, taipeiDate, canReviewLoans, canManageEquipment, partTypes, legacyPartTypes, type User, type Loan, type KitPart, type PartCheck } from "./types";
+import { roles, statusNames, taipeiDate, canReviewLoans, canManageEquipment, partTypes, legacyPartTypes, type User, type Loan, type ReturnRequest, type KitPart, type PartCheck } from "./types";
 import { sampleEquipment, sampleParts } from "./seed";
 import { translateSystem } from "./messages";
 
@@ -197,14 +197,75 @@ function equipmentInput(input: Record<string, unknown>, defaults?: { code: strin
     text(b, "notes", 1000, true),
   ];
 }
+type BatchItem = { loanId: string; expectedUpdated: string; confirmed: boolean };
+async function batchCheckout(actor: User, body: Record<string, unknown>, locale: string | null) {
+  assert(canManageEquipment(actor), "僅工程人員或系統管理員可辦理領用", 403);
+  const batchId = text(body, "batchId", 80);
+  const note = text({ note: "", ...body }, "note", 1000, true);
+  assert(Array.isArray(body.items) && body.items.length >= 1 && body.items.length <= 50, "每批請選擇 1 至 50 個設備箱");
+  const items: BatchItem[] = body.items.map(raw => {
+    assert(raw && typeof raw === "object" && !Array.isArray(raw), "批量領出資料格式不正確");
+    const item = raw as Record<string, unknown>;
+    assert(typeof item.confirmed === "boolean", "請確認各箱零件齊全且正常");
+    return { loanId: text(item, "loanId", 80), expectedUpdated: text(item, "expectedUpdated", 40), confirmed: item.confirmed };
+  }).sort((a, b) => a.loanId.localeCompare(b.loanId));
+  assert(new Set(items.map(item => item.loanId)).size === items.length, "同一筆申請不可重複選取");
+  const loans = await Promise.all(items.map(item => first<Loan>("SELECT * FROM loans WHERE id=?", [item.loanId])));
+  const valid = loans.filter((loan): loan is Loan => !!loan);
+  assert(valid.length > 0, "找不到申請", 404);
+  assert(valid.every(loan => loan.user_id === valid[0].user_id), "同一批須為相同借用人");
+  assert(new Set(valid.map(loan => loan.equipment_id)).size === valid.length, "同一批不可包含相同設備箱的多筆申請");
+  // Legacy batch summary is empty for mixed fixtures; each loan retains its own fixture.
+  const fixture = valid.every(loan => loan.production_line === valid[0].production_line) ? valid[0].production_line : "";
+  const payload = JSON.stringify({ note, items });
+  await statement("INSERT INTO checkout_batches(id,actor_id,borrower_id,production_line,payload,created) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING", [batchId, actor.id, valid[0].user_id, fixture, payload, now()]).run();
+  const batch = await first<{ actor_id: string; payload: string }>("SELECT actor_id,payload FROM checkout_batches WHERE id=?", [batchId]);
+  assert(batch?.actor_id === actor.id && batch.payload === payload, "批次識別碼已使用，請重新開啟批量領出", 409);
+  const results: { loanId: string; status: "success" | "failed"; error?: string }[] = [];
+  for (const item of items) {
+    const saved = await first<{ status: string }>("SELECT status FROM checkout_batch_items WHERE batch_id=? AND loan_id=?", [batchId, item.loanId]);
+    if (saved?.status === "success") { results.push({ loanId: item.loanId, status: "success" }); continue; }
+    try {
+      const loan = await first<Loan>("SELECT * FROM loans WHERE id=?", [item.loanId]);
+      assert(loan, "找不到申請", 404);
+      assert(item.confirmed, "請確認各箱零件齊全且正常");
+      assert(loan.status === "approved", "申請尚未核准或已完成領用，無法借出", 409);
+      assert(loan.updated === item.expectedUpdated, "申請內容已變更，請重新選取設備箱", 409);
+      const today = taipeiDate();
+      assert(loan.start <= today && loan.end >= today, "只能在核准的借用期間辦理領用");
+      const manifest = list<KitPart>(loan.manifest);
+      assert(manifest.length > 0, "此申請沒有零件快照，請改用單箱點交");
+      const checks = checklistInput(manifest.map(part => ({ id: part.id, quantity: part.quantity, checked: true, condition: "ok" })), manifest, "checkout");
+      const stamp = now();
+      await db().batch([
+        statement("UPDATE loans SET status='borrowed',checked_out=?,updated=?,checkout_check=?,checkout_batch_id=? WHERE id=? AND status='approved' AND updated=? AND EXISTS(SELECT 1 FROM equipment WHERE id=? AND condition='ready') AND NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status IN ('borrowed','return_pending'))", [stamp, stamp, JSON.stringify(checks), batchId, loan.id, item.expectedUpdated, loan.equipment_id, loan.equipment_id]),
+        statement("INSERT INTO events(id,actor_id,action,target,detail,created) SELECT ?,?,?,?,?,? WHERE changes()>0", [id(), actor.id, "辦理設備領用", loan.id, `批次 ${batchId} · ${note || "設備與配件點交完成"}`, stamp]),
+        statement("INSERT INTO checkout_batch_items(batch_id,loan_id,status,error,updated) SELECT ?,?,'success','',? FROM loans WHERE id=? AND checkout_batch_id=? ON CONFLICT(batch_id,loan_id) DO UPDATE SET status='success',error='',updated=excluded.updated", [batchId, loan.id, stamp, loan.id, batchId]),
+      ]);
+      const success = await first<{ status: string }>("SELECT status FROM checkout_batch_items WHERE batch_id=? AND loan_id=?", [batchId, loan.id]);
+      assert(success?.status === "success", "設備箱狀態已變更或已借出，請重新整理", 409);
+      results.push({ loanId: item.loanId, status: "success" });
+    } catch (error) {
+      // Another identical submission may have completed while this attempt was validating.
+      const completed = await first<{ status: string }>("SELECT status FROM checkout_batch_items WHERE batch_id=? AND loan_id=?", [batchId, item.loanId]);
+      if (completed?.status === "success") { results.push({ loanId: item.loanId, status: "success" }); continue; }
+      if (!(error instanceof ApiError)) throw error;
+      await statement("INSERT INTO checkout_batch_items(batch_id,loan_id,status,error,updated) VALUES(?,?,'failed',?,?) ON CONFLICT(batch_id,loan_id) DO UPDATE SET error=excluded.error,updated=excluded.updated WHERE checkout_batch_items.status!='success'", [batchId, item.loanId, error.message, now()]).run();
+      const outcome = await first<{ status: string; error: string }>("SELECT status,error FROM checkout_batch_items WHERE batch_id=? AND loan_id=?", [batchId, item.loanId]);
+      results.push(outcome?.status === "success" ? { loanId: item.loanId, status: "success" } : { loanId: item.loanId, status: "failed", error: translateSystem(outcome?.error || error.message, locale) });
+    }
+  }
+  return { ok: true, batchId, results, succeeded: results.filter(row => row.status === "success").length, failed: results.filter(row => row.status === "failed").length };
+}
+
 async function state(u: User) {
   const restricted =
     u.role === "employee" ? "WHERE l.user_id=?" : "";
   const args =
     u.role === "employee" ? [u.id] : [];
-  const [equipment, loans, users, events, settings] = await Promise.all([
+  const [equipment, loans, users, events, settings, returnRequests] = await Promise.all([
     all(
-      `SELECT e.*,EXISTS(SELECT 1 FROM loans l WHERE l.equipment_id=e.id AND l.status='borrowed') AS busy,EXISTS(SELECT 1 FROM loans l WHERE l.equipment_id=e.id AND l.status IN ('pending','approved') AND l.start<=? AND l.end>=?) AS reserved FROM equipment e ORDER BY e.code`,
+      `SELECT e.*,EXISTS(SELECT 1 FROM loans l WHERE l.equipment_id=e.id AND l.status IN ('borrowed','return_pending')) AS busy,EXISTS(SELECT 1 FROM loans l WHERE l.equipment_id=e.id AND l.status='return_pending') AS awaiting_return,EXISTS(SELECT 1 FROM loans l WHERE l.equipment_id=e.id AND l.status='approved') AS awaiting_issue,EXISTS(SELECT 1 FROM loans l WHERE l.equipment_id=e.id AND l.status IN ('pending','approved') AND l.start<=? AND l.end>=?) AS reserved FROM equipment e ORDER BY e.code`,
       [taipeiDate(), taipeiDate()],
     ),
     all(
@@ -219,7 +280,13 @@ async function state(u: User) {
       canManageEquipment(u) ? [] : [u.id, ...args],
     ),
     config(),
+    all<ReturnRequest>(`SELECT rr.*,q.name AS requester_name,v.name AS reviewer_name FROM return_requests rr JOIN loans l ON l.id=rr.loan_id JOIN users q ON q.id=rr.requester_id LEFT JOIN users v ON v.id=rr.reviewer_id ${restricted} ORDER BY rr.rowid`, args),
   ]);
+  const returnHistory = new Map<string, ReturnRequest[]>();
+  for (const request of returnRequests) {
+    const history = returnHistory.get(request.loan_id) || [];
+    history.push({ ...request, self_check: request.self_check === null ? null : list<PartCheck>(request.self_check) }); returnHistory.set(request.loan_id, history);
+  }
   const safe = Object.fromEntries(
     safeColumns
       .split(",")
@@ -228,7 +295,7 @@ async function state(u: User) {
   return {
     user: safe,
     equipment: equipment.map((row) => ({ ...row, components: list<KitPart>(row.components) })),
-    loans: loans.map((row) => ({ ...row, manifest: list<KitPart>(row.manifest), checkout_check: list<PartCheck>(row.checkout_check), return_check: list<PartCheck>(row.return_check) })),
+    loans: loans.map((row) => ({ ...row, manifest: list<KitPart>(row.manifest), checkout_check: list<PartCheck>(row.checkout_check), return_check: list<PartCheck>(row.return_check), return_requests: returnHistory.get(String(row.id)) || [] })),
     users,
     events,
     settings: {
@@ -567,7 +634,7 @@ export async function handle(req: Request) {
       const equipmentId = id();
       await db().batch([
         statement(
-          "INSERT INTO equipment (id,code,name,category,brand,model,serial,location,condition,notes,created,components) SELECT ?,COALESCE(?,(SELECT printf('PED-%04d',COALESCE(MAX(CAST(SUBSTR(code,5) AS INTEGER)),0)+1) FROM equipment WHERE code GLOB 'PED-[0-9]*' AND SUBSTR(code,5) NOT GLOB '*[^0-9]*')),?,?,?,?,?,?,?,?,?,?",
+          "INSERT INTO equipment (id,code,name,category,brand,model,serial,location,condition,notes,created,components) SELECT ?,COALESCE(?,(SELECT printf('BOX%03d',COALESCE(MAX(CAST(SUBSTR(code,4) AS INTEGER)),0)+1) FROM equipment WHERE code GLOB 'BOX[0-9]*' AND SUBSTR(code,4) NOT GLOB '*[^0-9]*')),?,?,?,?,?,?,?,?,?,?",
           [equipmentId, ...equipmentInput(b), now(), JSON.stringify(componentInput(b.components))],
         ),
         event(u.id, "新增設備", equipmentId, String(b.name)),
@@ -582,7 +649,7 @@ export async function handle(req: Request) {
       const values = equipmentInput(b, existing);
       const components = b.components === undefined ? null : JSON.stringify(componentInput(b.components));
       await logged(
-        "UPDATE equipment SET code=?,name=?,category=?,brand=?,model=?,serial=?,location=?,condition=?,notes=?,components=COALESCE(?,components) WHERE id=? AND (?='ready' OR NOT EXISTS (SELECT 1 FROM loans WHERE equipment_id=? AND status IN ('pending','approved','borrowed'))) AND (? IS NULL OR ?=components OR NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status IN ('pending','approved','borrowed')))",
+        "UPDATE equipment SET code=?,name=?,category=?,brand=?,model=?,serial=?,location=?,condition=?,notes=?,components=COALESCE(?,components) WHERE id=? AND (?='ready' OR NOT EXISTS (SELECT 1 FROM loans WHERE equipment_id=? AND status IN ('pending','approved','borrowed','return_pending'))) AND (? IS NULL OR ?=components OR NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status IN ('pending','approved','borrowed','return_pending')))",
         [...values, components, target, b.condition, target, components, components, target],
         u,
         "更新設備",
@@ -621,7 +688,7 @@ export async function handle(req: Request) {
       const target = id(),
         stamp = now();
       await logged(
-        "INSERT INTO loans (id,equipment_id,user_id,department,start,end,purpose,status,created,updated,production_line,work_order,product_model,manifest) SELECT ?,?,?,?,?,?,?,'pending',?,?,?,?,?,components FROM equipment WHERE id=? AND condition='ready' AND components!='[]' AND NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status IN ('pending','approved','borrowed') AND start<=? AND end>=?) AND NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status='borrowed')",
+        "INSERT INTO loans (id,equipment_id,user_id,department,start,end,purpose,status,created,updated,production_line,work_order,product_model,manifest) SELECT ?,?,?,?,?,?,?,'pending',?,?,?,?,?,components FROM equipment WHERE id=? AND condition='ready' AND components!='[]' AND NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status IN ('pending','approved','borrowed','return_pending') AND start<=? AND end>=?) AND NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status IN ('borrowed','return_pending'))",
         [
           target,
           equipmentId,
@@ -648,7 +715,7 @@ export async function handle(req: Request) {
         async () => {
           // Diagnose only after the atomic insert fails; never weaken its guards.
           const own = await first<Loan>(
-            "SELECT * FROM loans WHERE equipment_id=? AND user_id=? AND status IN ('pending','approved','borrowed') AND ((start<=? AND end>=?) OR status='borrowed') ORDER BY created DESC LIMIT 1",
+            "SELECT * FROM loans WHERE equipment_id=? AND user_id=? AND status IN ('pending','approved','borrowed','return_pending') AND ((start<=? AND end>=?) OR status IN ('borrowed','return_pending')) ORDER BY created DESC LIMIT 1",
             [equipmentId, u.id, end, start],
           );
           if (own)
@@ -666,7 +733,7 @@ export async function handle(req: Request) {
               { code: "equipment_unavailable" });
           if (!list(equipment.components).length)
             throw new ApiError("設備箱尚未建立零件清單，請先由 PED 完成建檔。", 409, { code: "manifest_required" });
-          const borrowed = await first<{ id: string }>("SELECT id FROM loans WHERE equipment_id=? AND status='borrowed' LIMIT 1", [equipmentId]);
+          const borrowed = await first<{ id: string }>("SELECT id FROM loans WHERE equipment_id=? AND status IN ('borrowed','return_pending') LIMIT 1", [equipmentId]);
           if (borrowed)
             throw new ApiError("設備箱已借出，歸還後才能申請。", 409, { code: "equipment_borrowed" });
           throw new ApiError(
@@ -677,6 +744,15 @@ export async function handle(req: Request) {
         },
       );
       return respond({ ok: true, id: target });
+    }
+    if (path === "loans/batch-checkout" && method === "POST")
+      return respond(await batchCheckout(u, b, req.headers.get("accept-language")));
+    if (path.startsWith("checkout-batches/") && method === "GET") {
+      assert(canManageEquipment(u), "僅工程人員或系統管理員可辦理領用", 403);
+      const batch = await first("SELECT id,actor_id,borrower_id,production_line,created FROM checkout_batches WHERE id=?", [path.slice("checkout-batches/".length)]);
+      assert(batch, "找不到批次", 404);
+      const rows = await all<{loan_id:string;status:string;error:string;updated:string;production_line:string}>("SELECT i.loan_id,i.status,i.error,i.updated,COALESCE(l.production_line,'') AS production_line FROM checkout_batch_items i LEFT JOIN loans l ON l.id=i.loan_id WHERE i.batch_id=? ORDER BY i.loan_id", [batch.id]);
+      return respond({ ...batch, items: rows.map(row => ({ ...row, error: translateSystem(row.error, req.headers.get("accept-language")) })) });
     }
     if (path.startsWith("loans/") && method === "POST") {
       const [, target, action] = path.split("/");
@@ -733,32 +809,52 @@ export async function handle(req: Request) {
         assert(l.status === "approved", "申請尚未核准或已完成領用，無法借出", 409);
         const checklist = checklistInput(b.checklist, list<KitPart>(l.manifest), "checkout");
         await logged(
-          "UPDATE loans SET status='borrowed',checked_out=?,updated=?,checkout_check=? WHERE id=? AND status='approved' AND EXISTS(SELECT 1 FROM equipment WHERE id=? AND condition='ready') AND NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status='borrowed')",
+          "UPDATE loans SET status='borrowed',checked_out=?,updated=?,checkout_check=? WHERE id=? AND status='approved' AND EXISTS(SELECT 1 FROM equipment WHERE id=? AND condition='ready') AND NOT EXISTS(SELECT 1 FROM loans WHERE equipment_id=? AND status IN ('borrowed','return_pending'))",
           [stamp, stamp, JSON.stringify(checklist), target, l.equipment_id, l.equipment_id],
           u,
           "辦理設備領用",
           target,
           note || "設備與配件點交完成",
         );
-      } else if (action === "return") {
-        assert(
-          canManageEquipment(u) || u.id === l.user_id,
-          "僅借用人、工程人員或系統管理員可辦理歸還",
-          403,
-        );
-        assert(note, "請填寫歸還檢查紀錄");
-        const checklist = checklistInput(b.checklist, list<KitPart>(l.manifest), "return");
-        const issue = checklist.some((row) => row.condition !== "ok");
+      } else if (action === "request-return") {
+        assert(u.id === l.user_id, "僅借用人可申請歸還", 403);
+        assert(l.status === "borrowed", "僅使用中的設備箱可申請歸還", 409);
+        assert(b.confirmed === true, "請確認設備箱與站別後再送出歸還申請");
+        const manifest = list<KitPart>(l.manifest);
+        assert(manifest.length || note, "歷史借用沒有零件快照，請填寫實際設備自檢說明");
+        const selfCheck = checklistInput(b.self_check, manifest, "return");
+        assert(selfCheck.every(row => row.condition === "ok" && row.quantity === manifest.find(part => part.id === row.id)?.quantity), "自檢須確認全部設備數量齊全且狀況正常，異常請先聯絡工程人員或管理員");
+        const requestId = id();
         await logged(
-          "UPDATE loans SET status='returned',returned=?,return_note=?,updated=?,return_check=? WHERE id=? AND status='borrowed'",
-          [stamp, note, stamp, JSON.stringify(checklist), target],
-          u,
-          "完成設備歸還",
-          target,
-          note,
+          "UPDATE loans SET status='return_pending',updated=? WHERE id=? AND status='borrowed'",
+          [stamp, target], u, "提出歸還申請", target, note || "等待工程人員實際點收",
           undefined,
-          issue ? [statement("UPDATE equipment SET condition='maintenance' WHERE id=? AND EXISTS(SELECT 1 FROM loans WHERE id=? AND status='returned' AND returned=?)", [l.equipment_id, target, stamp])] : [],
+          [statement("INSERT INTO return_requests(id,loan_id,requester_id,requested,request_note,status,self_check) SELECT ?,?,?,?,?,'pending',? WHERE changes()>0", [requestId, target, u.id, stamp, note, JSON.stringify(selfCheck)])],
         );
+      } else if (action === "return" || action === "reject-return") {
+        assert(canManageEquipment(u) && u.id !== l.user_id, "須由其他工程人員或系統管理員驗收歸還", 403);
+        assert(l.status === "return_pending", "請先由借用人申請歸還，再辦理驗收", 409);
+        const pending = await first<{id:string}>("SELECT id FROM return_requests WHERE loan_id=? AND status='pending'", [target]);
+        assert(pending && b.return_request_id === pending.id, "歸還申請已變更，請重新整理後再試", 409);
+        assert(note, action === "return" ? "請填寫歸還檢查紀錄" : "請填寫退回歸還申請的原因");
+        if (action === "reject-return") {
+          await logged(
+            "UPDATE loans SET status='borrowed',updated=? WHERE id=? AND status='return_pending' AND EXISTS(SELECT 1 FROM return_requests WHERE id=? AND loan_id=? AND status='pending')",
+            [stamp, target, pending.id, target], u, "退回歸還申請", target, note, undefined,
+            [statement("UPDATE return_requests SET status='rejected',reviewer_id=?,reviewed=?,review_note=? WHERE id=? AND status='pending' AND EXISTS(SELECT 1 FROM loans WHERE id=? AND status='borrowed' AND updated=?)", [u.id, stamp, note, pending.id, target, stamp])],
+          );
+        } else {
+          assert(b.received === true, "請確認已實際收到設備箱後再完成驗收");
+          const checklist = checklistInput(b.checklist, list<KitPart>(l.manifest), "return");
+          const issue = checklist.some(row => row.condition !== "ok");
+          await logged(
+            "UPDATE loans SET status='returned',returned=?,return_note=?,updated=?,return_check=? WHERE id=? AND status='return_pending' AND EXISTS(SELECT 1 FROM return_requests WHERE id=? AND loan_id=? AND status='pending')",
+            [stamp, note, stamp, JSON.stringify(checklist), target, pending.id, target],
+            u, "完成設備歸還", target, note, undefined,
+            [statement("UPDATE return_requests SET status='accepted',reviewer_id=?,reviewed=?,review_note=? WHERE id=? AND status='pending' AND EXISTS(SELECT 1 FROM loans WHERE id=? AND status='returned' AND returned=?)", [u.id, stamp, note, pending.id, target, stamp]),
+             ...(issue ? [statement("UPDATE equipment SET condition='maintenance' WHERE id=? AND EXISTS(SELECT 1 FROM loans WHERE id=? AND status='returned' AND returned=?)", [l.equipment_id, target, stamp])] : [])],
+          );
+        }
       } else throw new ApiError("找不到操作", 404);
       return respond({ ok: true });
     }

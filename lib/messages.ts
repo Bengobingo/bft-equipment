@@ -1,5 +1,31 @@
 // Only system-authored text is translated; names and production notes remain as entered.
 const english: Record<string, string> = {
+  "僅借用人可申請歸還": "Only the borrower can request a return.",
+  "僅使用中的設備箱可申請歸還": "Only boxes on loan can be submitted for return.",
+  "請確認設備箱與站別後再送出歸還申請": "Confirm the box and fixture before requesting a return.",
+  "須由其他工程人員或系統管理員驗收歸還": "Another engineer or administrator must inspect the return.",
+  "請先由借用人申請歸還，再辦理驗收": "The borrower must request a return before inspection.",
+  "歸還申請已變更，請重新整理後再試": "The return request has changed. Refresh and try again.",
+  "請填寫退回歸還申請的原因": "Enter a reason for declining the return request.",
+  "請確認已實際收到設備箱後再完成驗收": "Confirm physical receipt of the box before completing inspection.",
+  "歷史借用沒有零件快照，請填寫實際設備自檢說明": "This historical loan has no manifest snapshot. Describe the physical self-check.",
+  "自檢須確認全部設備數量齊全且狀況正常，異常請先聯絡工程人員或管理員": "Every component must be complete and working. Contact an engineer or administrator about any issue before submitting.",
+  "提出歸還申請": "Return requested",
+  "等待工程人員實際點收": "Awaiting physical return inspection",
+  "退回歸還申請": "Return request declined",
+
+  "每批請選擇 1 至 50 個設備箱": "Select between 1 and 50 boxes per batch.",
+  "批量領出資料格式不正確": "Invalid batch issue data.",
+  "請確認各箱零件齊全且正常": "Confirm that every box is complete and working.",
+  "同一筆申請不可重複選取": "A request can only appear once in a batch.",
+  "同一批須為相同借用人": "A batch must have the same borrower.",
+  "同一批不可包含相同設備箱的多筆申請": "A batch cannot contain multiple requests for the same box.",
+  "批次識別碼已使用，請重新開啟批量領出": "This batch ID is already in use. Reopen batch issue.",
+  "申請內容已變更，請重新選取設備箱": "The request has changed. Select the box again.",
+  "此申請沒有零件快照，請改用單箱點交": "This request has no component manifest. Use single-box issue.",
+  "設備箱狀態已變更或已借出，請重新整理": "The box has changed or is already on loan. Refresh the list.",
+  "找不到批次": "Batch not found.",
+
   "PED 工程人員": "PED engineer",
   "找不到設備箱": "Box not found.",
   "系統已完成初始化": "This system has already been initialized.",
@@ -102,7 +128,7 @@ export function translateSystem(message: string, locale?: string | null): string
   const setting = message.match(/^最長借用 (\d+) 天$/);
   if (setting) return `Maximum borrowing period: ${setting[1]} days`;
   const own = message.match(/^你已有此設備的借用申請（(.+)～(.+)，(.+)），/);
-  const statuses: Record<string, string> = { "待簽核": "pending approval", "待領用": "approved", "借用中": "issued" };
+  const statuses: Record<string, string> = { "待簽核": "pending approval", "待領用": "approved", "借用中": "issued", "待歸還驗收": "awaiting return inspection" };
   if (own) return `You already have a request for this box (${own[1]} to ${own[2]}, ${statuses[own[3]] || own[3]}). Open the original request instead of submitting again.`;
   const limit = message.match(/^借用最長為 (\d+) 天$/);
   if (limit) return `The maximum borrowing period is ${limit[1]} days.`;

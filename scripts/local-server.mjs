@@ -5,7 +5,8 @@ import { Miniflare, Log, LogLevel } from "miniflare";
 
 // Run the already-built application directly: no file watcher or development proxy.
 const root = fileURLToPath(new URL("../", import.meta.url));
-const [port, stateDirectory, instance] = process.argv.slice(2);
+const [port, stateDirectory, instance, host = "127.0.0.1"] = process.argv.slice(2);
+if (!["127.0.0.1", "0.0.0.0"].includes(host)) throw new Error("不支援的監聽位址。");
 if (!port || !stateDirectory || !instance)
   throw new Error("請使用 local-start.mjs 啟動系統。");
 const moduleRoot = path.join(root, "dist/server");
@@ -26,7 +27,7 @@ const modules = [
 ].map((file) => ({ type: "ESModule", path: file }));
 const runtime = new Miniflare({
   name: "bft-equipment-local",
-  host: "127.0.0.1",
+  host,
   port: Number(port),
   modules,
   modulesRoot: moduleRoot,
@@ -58,7 +59,7 @@ process.once("SIGTERM", () => {
 });
 try {
   await runtime.ready;
-  console.log(`本機伺服器已啟動：http://127.0.0.1:${port}`);
+  console.log(`本機伺服器已啟動：http://127.0.0.1:${port}${host === "0.0.0.0" ? "（區域網模式 / LAN enabled）" : ""}`);
 } catch (error) {
   await close();
   throw error;

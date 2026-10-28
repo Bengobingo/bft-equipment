@@ -2,14 +2,14 @@
 import { useEffect, useRef, type ReactNode, type ButtonHTMLAttributes } from "react";
 import { AlertCircle, Box, X, PackageOpen, LoaderCircle } from "lucide-react";
 import { AppearanceControls, usePreferences } from "./preferences";
-import { categories, type KitPart, type PartCheck, type Role } from "@/lib/types";
+import { type KitPart, type PartCheck, type Role } from "@/lib/types";
 
 export function Button({ children, variant = "", className = "", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: string }) {
   return <button type="button" {...props} className={`button ${variant} ${className}`}>{children}</button>;
 }
 export function Brand({ onHome }: { onHome?: () => void }) {
   const { tx } = usePreferences();
-  const content = <><Box size={30} strokeWidth={1.6} aria-hidden="true" /><span><strong>BFT <b>PED</b></strong><small>{tx("工程設備箱管制", "Engineering Box Control")}</small></span></>;
+  const content = <><Box size={30} strokeWidth={1.6} aria-hidden="true" /><span><strong>BFT <b>PED</b></strong><small>{tx("設備箱管理系統", "Equipment Box Management System")}</small></span></>;
   return onHome ? <a className="brand" href="#dashboard" aria-label={tx("BFT PED 首頁", "BFT PED home")} title={tx("返回總覽", "Back to dashboard")} onClick={event => { if (event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) { event.preventDefault(); onHome(); } }}>{content}</a> : <div className="brand">{content}</div>;
 }
 export function Avatar({ name }: { name: string }) {
@@ -20,12 +20,12 @@ export function Avatar({ name }: { name: string }) {
 export function useLabels() {
   const { locale, tx } = usePreferences();
   const status = (value: string) => ({
-    pending: tx("待工程人員簽核", "Pending engineer review"), approved: tx("待點交借出", "Ready to issue"), borrowed: tx("產線使用中", "On production line"),
+    pending: tx("待工程人員簽核", "Pending engineer review"), approved: tx("待點交借出", "Ready to issue"), borrowed: tx("產線使用中", "On production line"), return_pending: tx("待歸還驗收", "Awaiting return inspection"),
     returned: tx("已歸還", "Returned"), rejected: tx("已駁回", "Rejected"), cancelled: tx("已取消", "Cancelled"),
     ready: tx("可申請", "Available"), unconfigured: tx("待建零件清單", "Manifest needed"), reserved: tx("今日已預約", "Reserved today"), maintenance: tx("待維護／補件", "Maintenance / shortage"), retired: tx("已停用", "Retired"), overdue: tx("逾期未還", "Overdue"),
   }[value] || value);
   const role = (value: Role) => ({ employee: tx("產線操作人員", "Production operator"), approver: tx("PED 工程人員", "PED engineer"), admin: tx("系統管理員", "Administrator") }[value]);
-  const category = (value: string) => locale !== "en" ? value : ["Server system box", "Mainboard test box", "CPU / DIMM box", "Storage / cable box", "Thermal / fixture box", "Other engineering box"][categories.indexOf(value)] || value;
+  const category = (value: string) => locale !== "en" ? value : ({ "主機板測試設備箱": "Mainboard test box", "其他工程設備箱": "Other engineering box", "伺服器整機設備箱": "Server system box", "CPU / DIMM 設備箱": "CPU / DIMM box", "儲存 / 線材設備箱": "Storage / cable box", "散熱 / 治具設備箱": "Thermal / fixture box" } as Record<string, string>)[value] || value;
   const date = (value: string, time = false) => value ? new Intl.DateTimeFormat(locale, { timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit", ...(time ? { hour: "2-digit", minute: "2-digit", hour12: false } : {}) }).format(new Date(value.length === 10 ? value + "T00:00:00+08:00" : value)) : "—";
   return { status, role, category, date };
 }

@@ -8,5 +8,5 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-node scripts\local-start.mjs --open
+node scripts\local-start.mjs --lan --open
 if errorlevel 1 pause
